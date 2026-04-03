@@ -45,6 +45,7 @@ function createNocoDbService({ store, config }) {
         tableId: settings.tableId,
         columnCount: columns.length,
         autoSyncOnCompletion: settings.autoSyncOnCompletion,
+        autoSyncIntervalMinutes: settings.autoSyncIntervalMinutes || 0,
         autoCreateColumns: settings.autoCreateColumns,
       };
     },
@@ -149,6 +150,50 @@ function createNocoDbService({ store, config }) {
         return null;
       }
     },
+
+    getRunningJobSyncIdsDue() {
+      const settings = store.getNocoDbConfig();
+      if (!hasEnoughSettings(settings)) {
+        return [];
+      }
+
+      const intervalMinutes = settings.autoSyncIntervalMinutes || 0;
+      if (intervalMinutes <= 0) {
+        return [];
+      }
+
+      const intervalMs = intervalMinutes * 60 * 1000;
+      const now = Date.now();
+
+      return store
+        .listJobs({ limit: 250 })
+        .filter((job) => ["queued", "running"].includes(job.status))
+        .map((job) => ({
+          job,
+          syncState: store.getNocoDbSyncState(job.id),
+        }))
+        .filter(({ syncState }) => syncState.lastStatus !== "running")
+        .filter(({ job, syncState }) => {
+          const hasUnsyncedLead =
+            store.getJobLeadsAfterId(job.id, syncState.lastSyncedLeadId || 0, {
+              limit: 1,
+            }).length > 0;
+
+          if (!hasUnsyncedLead) {
+            return false;
+          }
+
+          const lastActivityAt =
+            syncState.lastFinishedAt || syncState.lastStartedAt || null;
+
+          if (!lastActivityAt) {
+            return true;
+          }
+
+          return now - Date.parse(lastActivityAt) >= intervalMs;
+        })
+        .map(({ job }) => job.id);
+    },
   };
 }
 
@@ -169,12 +214,21 @@ function resolveSettings(store, input) {
 }
 
 function sanitizeSettings(input) {
+  const autoSyncIntervalMinutes = Number.parseInt(
+    input.autoSyncIntervalMinutes,
+    10
+  );
+
   return {
     baseUrl: cleanString(input.baseUrl),
     apiToken: cleanString(input.apiToken),
     baseId: cleanString(input.baseId),
     tableId: cleanString(input.tableId),
     autoSyncOnCompletion: Boolean(input.autoSyncOnCompletion),
+    autoSyncIntervalMinutes:
+      Number.isFinite(autoSyncIntervalMinutes) && autoSyncIntervalMinutes > 0
+        ? autoSyncIntervalMinutes
+        : 0,
     autoCreateColumns:
       input.autoCreateColumns == null ? true : Boolean(input.autoCreateColumns),
     promotedTags: normalizeStringArray(input.promotedTags),
@@ -205,6 +259,7 @@ function toPublicConfig(settings) {
     baseId: settings.baseId,
     tableId: settings.tableId,
     autoSyncOnCompletion: Boolean(settings.autoSyncOnCompletion),
+    autoSyncIntervalMinutes: settings.autoSyncIntervalMinutes || 0,
     autoCreateColumns: settings.autoCreateColumns !== false,
     promotedTags: normalizeStringArray(settings.promotedTags),
     hasApiToken: Boolean(settings.apiToken),

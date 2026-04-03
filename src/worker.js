@@ -38,6 +38,7 @@ function createWorker({ store, config, nocoDb = null }) {
         await bootstrapPendingJobs();
         const shard = store.claimNextShard();
         if (!shard) {
+          await maybeSyncRunningJobs();
           return;
         }
 
@@ -54,6 +55,7 @@ function createWorker({ store, config, nocoDb = null }) {
           : null;
 
         await processShard(job, shard, geometry);
+        await maybeSyncRunningJobs();
         await maybeFinalizeJob(job.id);
       } finally {
         busy = false;
@@ -164,6 +166,21 @@ function createWorker({ store, config, nocoDb = null }) {
 
     if (nocoDb) {
       await nocoDb.syncCompletedJobIfEnabled(jobId);
+    }
+  }
+
+  async function maybeSyncRunningJobs() {
+    if (!nocoDb?.getRunningJobSyncIdsDue) {
+      return;
+    }
+
+    const dueJobIds = nocoDb.getRunningJobSyncIdsDue();
+    for (const jobId of dueJobIds) {
+      try {
+        await nocoDb.syncJob(jobId);
+      } catch (error) {
+        console.error(`Incremental NocoDB sync failed for job ${jobId}:`, error.message);
+      }
     }
   }
 }

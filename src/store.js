@@ -559,6 +559,10 @@ function createStore(config) {
           "nocodb.autoSyncOnCompletion",
           config.nocoDb.autoSyncOnCompletion
         ),
+        autoSyncIntervalMinutes: this.getAppSetting(
+          "nocodb.autoSyncIntervalMinutes",
+          config.nocoDb.autoSyncIntervalMinutes
+        ),
         autoCreateColumns: this.getAppSetting(
           "nocodb.autoCreateColumns",
           config.nocoDb.autoCreateColumns
@@ -587,6 +591,7 @@ function createStore(config) {
         "nocodb.baseId": next.baseId,
         "nocodb.tableId": next.tableId,
         "nocodb.autoSyncOnCompletion": next.autoSyncOnCompletion,
+        "nocodb.autoSyncIntervalMinutes": next.autoSyncIntervalMinutes,
         "nocodb.autoCreateColumns": next.autoCreateColumns,
         "nocodb.promotedTags": next.promotedTags,
       });
@@ -699,6 +704,39 @@ function createStore(config) {
 
       this.refreshJobStats(jobId);
       return this.getJob(jobId);
+    },
+
+    deleteJob(jobId) {
+      const job = this.getJob(jobId);
+      if (!job) {
+        return null;
+      }
+
+      if (!["completed", "partial", "failed", "canceled"].includes(job.status)) {
+        const error = new Error(
+          "Only completed, partial, failed, or canceled jobs can be deleted."
+        );
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const artifactPaths = [job.artifactCsvPath, job.artifactJsonPath].filter(Boolean);
+
+      db.transaction(() => {
+        db.prepare(`DELETE FROM jobs WHERE id = ?`).run(jobId);
+      })();
+
+      for (const artifactPath of artifactPaths) {
+        try {
+          fs.unlinkSync(artifactPath);
+        } catch (error) {
+          if (error.code !== "ENOENT") {
+            throw error;
+          }
+        }
+      }
+
+      return job;
     },
 
     getJobLeadsAfterId(jobId, leadId = 0, { limit = 100 } = {}) {
@@ -1139,12 +1177,21 @@ function deserializeSyncStateRow(row) {
 }
 
 function sanitizeNocoDbConfig(input) {
+  const autoSyncIntervalMinutes = Number.parseInt(
+    input.autoSyncIntervalMinutes,
+    10
+  );
+
   return {
     baseUrl: cleanString(input.baseUrl),
     apiToken: cleanString(input.apiToken),
     baseId: cleanString(input.baseId),
     tableId: cleanString(input.tableId),
     autoSyncOnCompletion: Boolean(input.autoSyncOnCompletion),
+    autoSyncIntervalMinutes:
+      Number.isFinite(autoSyncIntervalMinutes) && autoSyncIntervalMinutes > 0
+        ? autoSyncIntervalMinutes
+        : 0,
     autoCreateColumns:
       input.autoCreateColumns == null ? true : Boolean(input.autoCreateColumns),
     promotedTags: normalizeStringArray(input.promotedTags),

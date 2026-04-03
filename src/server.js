@@ -206,6 +206,23 @@ function createApp({ store, config, nocoDb }) {
     });
   });
 
+  app.delete("/jobs/:jobId", (req, res, next) => {
+    try {
+      const job = store.getJob(req.params.jobId);
+      if (!job) {
+        return res.status(404).json({ error: "Job not found." });
+      }
+
+      const deletedJob = store.deleteJob(job.id);
+      return res.json({
+        ok: true,
+        deletedJob,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.get("/jobs/:jobId/sync/nocodb", (req, res) => {
     const job = store.getJob(req.params.jobId);
     if (!job) {
@@ -283,6 +300,7 @@ function buildLinks(req, config, jobId) {
     csv: `${baseUrl}/jobs/${jobId}/download?format=csv`,
     json: `${baseUrl}/jobs/${jobId}/download?format=json`,
     cancel: `${baseUrl}/jobs/${jobId}/cancel`,
+    delete: `${baseUrl}/jobs/${jobId}`,
     nocodbSync: `${baseUrl}/jobs/${jobId}/sync/nocodb`,
   };
 }

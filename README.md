@@ -12,7 +12,7 @@ Autonomous country-scale OpenStreetMap scraper built for long-running public API
 - retries and splits failed or overloaded shards
 - exports CSV and JSON artifacts when a job finishes
 - exposes a built-in operator dashboard for long-running country jobs
-- can sync normalized lead output into NocoDB from the dashboard or automatically on job completion
+- can sync normalized lead output into NocoDB from the dashboard, automatically on job completion, or incrementally while jobs are still running
 
 ## Keyword input
 
@@ -110,6 +110,14 @@ curl -b cookies.txt -X POST http://localhost:3000/jobs/<jobId>/cancel
 
 Canceling a job moves all pending, retrying, and currently claimed shards into `canceled` and prevents any in-flight shard from writing more results after the cancel request lands.
 
+### Delete job
+
+```bash
+curl -b cookies.txt -X DELETE http://localhost:3000/jobs/<jobId>
+```
+
+Only terminal jobs can be deleted. If a job is still running, cancel it first. Deletion removes the job row, its shards, leads, NocoDB sync state, and generated artifact files.
+
 ### NocoDB integration
 
 The dashboard includes an **NocoDB integration** panel where you can:
@@ -117,6 +125,7 @@ The dashboard includes an **NocoDB integration** panel where you can:
 - save the NocoDB base URL, API token, base ID, and table ID
 - test the connection before syncing
 - enable automatic sync when jobs finish
+- set an incremental sync interval in minutes for running jobs (`0` disables in-progress sync)
 - choose comma-separated promoted OSM tag keys that become extra NocoDB columns
 - manually sync any selected job into NocoDB
 
@@ -158,6 +167,7 @@ If **auto-create columns** is enabled, the scraper will try to create any missin
 - `NOCODB_BASE_ID` default NocoDB base/project ID
 - `NOCODB_TABLE_ID` default NocoDB table ID for synced leads
 - `NOCODB_AUTO_SYNC_ON_COMPLETION` automatically sync completed jobs to NocoDB
+- `NOCODB_AUTO_SYNC_INTERVAL_MINUTES` sync new leads to NocoDB every N minutes while a job is running (`0` disables)
 - `NOCODB_AUTO_CREATE_COLUMNS` create missing target columns before syncing
 - `NOCODB_PROMOTED_TAGS` comma-separated OSM tag keys to promote to first-class NocoDB columns
 

@@ -7,7 +7,7 @@ const {
 const { resolveCountry, queryOverpass } = require("./osm");
 const { writeArtifacts } = require("./exporters");
 
-function createWorker({ store, config }) {
+function createWorker({ store, config, nocoDb = null }) {
   let timer = null;
   let busy = false;
 
@@ -90,6 +90,10 @@ function createWorker({ store, config }) {
         config,
       });
 
+      if (store.getJob(job.id)?.status === "canceled") {
+        return;
+      }
+
       if (
         response.rawCount >= config.resultSplitThreshold &&
         shard.depth < config.maxShardDepth &&
@@ -109,6 +113,10 @@ function createWorker({ store, config }) {
 
       const canSplit =
         shard.depth < config.maxShardDepth && canSplitBBox(shard.bbox, config);
+
+      if (store.getJob(job.id)?.status === "canceled") {
+        return;
+      }
 
       if (isRateOrTimeout && canSplit && shard.attemptCount >= 2) {
         store.splitShard(shard.id, splitBBox(shard.bbox));
@@ -153,6 +161,10 @@ function createWorker({ store, config }) {
         ? "Completed successfully."
         : "Completed with failed shards.";
     store.finalizeJob(jobId, status, message, artifacts);
+
+    if (nocoDb) {
+      await nocoDb.syncCompletedJobIfEnabled(jobId);
+    }
   }
 }
 

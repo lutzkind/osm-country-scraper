@@ -190,6 +190,23 @@
         width: auto;
       }
 
+      .stack {
+        display: grid;
+        gap: 10px;
+      }
+
+      .inline-option {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .inline-option input[type="checkbox"] {
+        width: auto;
+      }
+
       .message {
         margin-top: 10px;
         font-size: 14px;
@@ -250,6 +267,25 @@
         </div>
 
         <div class="panel">
+          <h2>NocoDB integration</h2>
+          <form id="nocodb-form" class="stack">
+            <input id="nocodb-base-url" name="baseUrl" placeholder="NocoDB base URL, e.g. https://nocodb.example.com">
+            <input id="nocodb-api-token" name="apiToken" type="password" placeholder="API token (leave blank to keep saved token)">
+            <input id="nocodb-base-id" name="baseId" placeholder="Base ID">
+            <input id="nocodb-table-id" name="tableId" placeholder="Table ID for synced leads">
+            <input id="nocodb-promoted-tags" name="promotedTags" placeholder="Promoted OSM tags, comma-separated">
+            <label class="inline-option"><input id="nocodb-auto-sync" type="checkbox"> Auto-sync completed jobs</label>
+            <label class="inline-option"><input id="nocodb-auto-create-columns" type="checkbox"> Auto-create missing NocoDB columns</label>
+            <div class="subtle">The sync stores normalized lead fields plus <code>raw_tags_json</code>. Promoted tags become extra columns such as <code>osm_contact_website</code>.</div>
+            <div class="toolbar">
+              <button type="submit">Save NocoDB settings</button>
+              <button id="nocodb-test-button" class="secondary" type="button">Test connection</button>
+            </div>
+          </form>
+          <div id="nocodb-message" class="message"></div>
+        </div>
+
+        <div class="panel">
           <div class="job-meta">
             <h2>Jobs</h2>
             <button id="refresh-jobs" class="secondary" type="button">Refresh</button>
@@ -273,7 +309,12 @@
               </div>
               <div id="job-status"></div>
             </div>
+            <div class="toolbar">
+              <button id="cancel-job-button" class="secondary" type="button">Cancel job</button>
+              <button id="sync-nocodb-button" class="secondary" type="button">Sync to NocoDB</button>
+            </div>
             <div id="job-links" class="subtle"></div>
+            <div id="job-sync-status" class="subtle"></div>
           </div>
 
           <div id="stats-grid" class="stats-grid"></div>
@@ -359,6 +400,7 @@
         selectedJobId: new URLSearchParams(window.location.search).get("jobId"),
         jobs: [],
         refreshTimer: null,
+        nocodbConfig: null,
       };
 
       const els = {
@@ -366,6 +408,16 @@
         logoutButton: document.getElementById("logout-button"),
         createJobForm: document.getElementById("create-job-form"),
         createJobMessage: document.getElementById("create-job-message"),
+        nocodbForm: document.getElementById("nocodb-form"),
+        nocodbBaseUrl: document.getElementById("nocodb-base-url"),
+        nocodbApiToken: document.getElementById("nocodb-api-token"),
+        nocodbBaseId: document.getElementById("nocodb-base-id"),
+        nocodbTableId: document.getElementById("nocodb-table-id"),
+        nocodbPromotedTags: document.getElementById("nocodb-promoted-tags"),
+        nocodbAutoSync: document.getElementById("nocodb-auto-sync"),
+        nocodbAutoCreateColumns: document.getElementById("nocodb-auto-create-columns"),
+        nocodbTestButton: document.getElementById("nocodb-test-button"),
+        nocodbMessage: document.getElementById("nocodb-message"),
         jobList: document.getElementById("job-list"),
         refreshJobs: document.getElementById("refresh-jobs"),
         selectedJobEmpty: document.getElementById("selected-job-empty"),
@@ -374,6 +426,9 @@
         jobSubtitle: document.getElementById("job-subtitle"),
         jobStatus: document.getElementById("job-status"),
         jobLinks: document.getElementById("job-links"),
+        jobSyncStatus: document.getElementById("job-sync-status"),
+        cancelJobButton: document.getElementById("cancel-job-button"),
+        syncNocoDbButton: document.getElementById("sync-nocodb-button"),
         statsGrid: document.getElementById("stats-grid"),
         shardStatusFilter: document.getElementById("shard-status-filter"),
         refreshSelected: document.getElementById("refresh-selected"),
@@ -392,6 +447,11 @@
 
       function badge(status) {
         return `<span class="badge ${escapeHtml(status)}">${escapeHtml(status)}</span>`;
+      }
+
+      function setMessage(element, message, isError = false) {
+        element.textContent = message;
+        element.classList.toggle("error", Boolean(isError));
       }
 
       function formatNumber(value) {
@@ -466,7 +526,42 @@
         renderJobs();
       }
 
-      function renderStats(job, stats, links) {
+      async function loadNocoDbConfig() {
+        const payload = await requestJson("/integrations/nocodb");
+        state.nocodbConfig = payload;
+        els.nocodbBaseUrl.value = payload.baseUrl || "";
+        els.nocodbApiToken.value = "";
+        els.nocodbApiToken.placeholder = payload.hasApiToken
+          ? "Token saved. Leave blank to keep it."
+          : "API token";
+        els.nocodbBaseId.value = payload.baseId || "";
+        els.nocodbTableId.value = payload.tableId || "";
+        els.nocodbPromotedTags.value = (payload.promotedTags || []).join(", ");
+        els.nocodbAutoSync.checked = Boolean(payload.autoSyncOnCompletion);
+        els.nocodbAutoCreateColumns.checked = payload.autoCreateColumns !== false;
+      }
+
+      function nocodbPayloadFromForm(includeToken) {
+        const payload = {
+          baseUrl: els.nocodbBaseUrl.value.trim(),
+          baseId: els.nocodbBaseId.value.trim(),
+          tableId: els.nocodbTableId.value.trim(),
+          promotedTags: els.nocodbPromotedTags.value
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean),
+          autoSyncOnCompletion: els.nocodbAutoSync.checked,
+          autoCreateColumns: els.nocodbAutoCreateColumns.checked,
+        };
+
+        if (includeToken || els.nocodbApiToken.value.trim()) {
+          payload.apiToken = els.nocodbApiToken.value.trim();
+        }
+
+        return payload;
+      }
+
+      function renderStats(job, stats, links, syncStatus) {
         const cards = [
           ["Leads", formatNumber(job.leadCount)],
           ["Known shard completion", `${stats.progress.knownShardCompletionRatio}%`],
@@ -498,8 +593,17 @@
           <a href="${escapeHtml(links.errors)}">errors</a> ·
           <a href="${escapeHtml(links.leads)}">leads</a> ·
           <a href="${escapeHtml(links.csv)}">csv</a> ·
-          <a href="${escapeHtml(links.json)}">json</a>
+          <a href="${escapeHtml(links.json)}">json</a> ·
+          <a href="${escapeHtml(links.nocodbSync)}">nocodb sync</a>
         `;
+
+        const sync = syncStatus?.sync || {};
+        const syncMessage = sync.lastMessage
+          ? `NocoDB sync: ${sync.lastStatus || "idle"} · ${sync.lastMessage}`
+          : `NocoDB sync: ${sync.lastStatus || "idle"}`;
+        els.jobSyncStatus.textContent = syncMessage;
+        els.cancelJobButton.disabled = ["completed", "partial", "failed", "canceled"].includes(job.status);
+        els.syncNocoDbButton.disabled = !syncStatus?.enabled;
       }
 
       function renderShards(payload) {
@@ -570,14 +674,15 @@
           shardUrl.searchParams.set("status", statusFilter);
         }
 
-        const [jobPayload, shardsPayload, errorsPayload, leadsPayload] = await Promise.all([
+        const [jobPayload, shardsPayload, errorsPayload, leadsPayload, syncPayload] = await Promise.all([
           requestJson(`/jobs/${state.selectedJobId}`),
           requestJson(shardUrl),
           requestJson(`/jobs/${state.selectedJobId}/errors?limit=15`),
           requestJson(`/jobs/${state.selectedJobId}/leads?limit=25&offset=0`),
+          requestJson(`/jobs/${state.selectedJobId}/sync/nocodb`),
         ]);
 
-        renderStats(jobPayload.job, jobPayload.stats, jobPayload.links);
+        renderStats(jobPayload.job, jobPayload.stats, jobPayload.links, syncPayload);
         renderShards(shardsPayload);
         renderErrors(errorsPayload);
         renderLeads(leadsPayload);
@@ -589,18 +694,17 @@
       async function fullRefresh() {
         try {
           await loadSession();
+          await loadNocoDbConfig();
           await loadJobs();
           await refreshSelectedJob();
         } catch (error) {
-          els.createJobMessage.textContent = error.message;
-          els.createJobMessage.classList.add("error");
+          setMessage(els.createJobMessage, error.message, true);
         }
       }
 
       els.createJobForm.addEventListener("submit", async (event) => {
         event.preventDefault();
-        els.createJobMessage.classList.remove("error");
-        els.createJobMessage.textContent = "Creating job...";
+        setMessage(els.createJobMessage, "Creating job...");
 
         try {
           const payload = await requestJson("/jobs", {
@@ -614,34 +718,114 @@
 
           state.selectedJobId = payload.job.id;
           els.createJobMessage.innerHTML = `Started job <code>${escapeHtml(payload.job.id)}</code>.`;
+          els.createJobMessage.classList.remove("error");
           document.getElementById("country").value = "";
           document.getElementById("keyword").value = "";
           await fullRefresh();
         } catch (error) {
-          els.createJobMessage.textContent = error.message;
-          els.createJobMessage.classList.add("error");
+          setMessage(els.createJobMessage, error.message, true);
+        }
+      });
+
+      els.nocodbForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        setMessage(els.nocodbMessage, "Saving NocoDB settings...");
+
+        try {
+          const payload = await requestJson("/integrations/nocodb", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(nocodbPayloadFromForm(true)),
+          });
+
+          state.nocodbConfig = payload;
+          await loadNocoDbConfig();
+          setMessage(els.nocodbMessage, "NocoDB settings saved.");
+          await refreshSelectedJob();
+        } catch (error) {
+          setMessage(els.nocodbMessage, error.message, true);
+        }
+      });
+
+      els.nocodbTestButton.addEventListener("click", async () => {
+        setMessage(els.nocodbMessage, "Testing NocoDB connection...");
+
+        try {
+          const payload = await requestJson("/integrations/nocodb/test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(nocodbPayloadFromForm(true)),
+          });
+
+          setMessage(
+            els.nocodbMessage,
+            `Connection OK. Table ${payload.tableId} responded with ${payload.columnCount} columns.`
+          );
+        } catch (error) {
+          setMessage(els.nocodbMessage, error.message, true);
         }
       });
 
       els.refreshJobs.addEventListener("click", () => {
         fullRefresh().catch((error) => {
-          els.createJobMessage.textContent = error.message;
-          els.createJobMessage.classList.add("error");
+          setMessage(els.createJobMessage, error.message, true);
         });
       });
 
       els.refreshSelected.addEventListener("click", () => {
         refreshSelectedJob().catch((error) => {
-          els.createJobMessage.textContent = error.message;
-          els.createJobMessage.classList.add("error");
+          setMessage(els.createJobMessage, error.message, true);
         });
       });
 
       els.shardStatusFilter.addEventListener("change", () => {
         refreshSelectedJob().catch((error) => {
-          els.createJobMessage.textContent = error.message;
-          els.createJobMessage.classList.add("error");
+          setMessage(els.createJobMessage, error.message, true);
         });
+      });
+
+      els.cancelJobButton.addEventListener("click", async () => {
+        if (!state.selectedJobId) {
+          return;
+        }
+
+        setMessage(els.createJobMessage, "Canceling job...");
+
+        try {
+          await requestJson(`/jobs/${state.selectedJobId}/cancel`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
+          setMessage(els.createJobMessage, "Job canceled.");
+          await fullRefresh();
+        } catch (error) {
+          setMessage(els.createJobMessage, error.message, true);
+        }
+      });
+
+      els.syncNocoDbButton.addEventListener("click", async () => {
+        if (!state.selectedJobId) {
+          return;
+        }
+
+        setMessage(els.nocodbMessage, "Syncing selected job to NocoDB...");
+
+        try {
+          const payload = await requestJson(`/jobs/${state.selectedJobId}/sync/nocodb`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
+
+          setMessage(
+            els.nocodbMessage,
+            payload.sync?.lastMessage || `Synced ${payload.syncedRecordCount || 0} records.`
+          );
+          await refreshSelectedJob();
+        } catch (error) {
+          setMessage(els.nocodbMessage, error.message, true);
+        }
       });
 
       els.logoutButton.addEventListener("click", async () => {

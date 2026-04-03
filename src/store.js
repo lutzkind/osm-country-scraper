@@ -88,6 +88,24 @@ function createStore(config) {
 
     CREATE INDEX IF NOT EXISTS idx_sessions_expires_at
       ON sessions(expires_at);
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS nocodb_sync_state (
+      job_id TEXT PRIMARY KEY,
+      last_synced_lead_id INTEGER NOT NULL DEFAULT 0,
+      last_synced_at TEXT,
+      last_status TEXT NOT NULL DEFAULT 'idle',
+      last_message TEXT,
+      last_started_at TEXT,
+      last_finished_at TEXT,
+      synced_record_count INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    );
   `);
 
   resetRunningShards(db);
@@ -490,6 +508,170 @@ function createStore(config) {
       cleanupExpiredSessions(db);
     },
 
+    getAppSetting(key, fallback = null) {
+      const row = db
+        .prepare(
+          `
+            SELECT value_json
+            FROM app_settings
+            WHERE key = ?
+          `
+        )
+        .get(key);
+
+      if (!row) {
+        return fallback;
+      }
+
+      return parseJsonOrFallback(row.value_json, fallback);
+    },
+
+    setAppSettings(settings) {
+      const timestamp = nowIso();
+      const upsert = db.prepare(
+        `
+          INSERT INTO app_settings (key, value_json, updated_at)
+          VALUES (@key, @valueJson, @timestamp)
+          ON CONFLICT(key) DO UPDATE SET
+            value_json = excluded.value_json,
+            updated_at = excluded.updated_at
+        `
+      );
+
+      db.transaction(() => {
+        for (const [key, value] of Object.entries(settings)) {
+          upsert.run({
+            key,
+            valueJson: JSON.stringify(value),
+            timestamp,
+          });
+        }
+      })();
+    },
+
+    getNocoDbConfig() {
+      return sanitizeNocoDbConfig({
+        baseUrl: this.getAppSetting("nocodb.baseUrl", config.nocoDb.baseUrl),
+        apiToken: this.getAppSetting("nocodb.apiToken", config.nocoDb.apiToken),
+        baseId: this.getAppSetting("nocodb.baseId", config.nocoDb.baseId),
+        tableId: this.getAppSetting("nocodb.tableId", config.nocoDb.tableId),
+        autoSyncOnCompletion: this.getAppSetting(
+          "nocodb.autoSyncOnCompletion",
+          config.nocoDb.autoSyncOnCompletion
+        ),
+        autoCreateColumns: this.getAppSetting(
+          "nocodb.autoCreateColumns",
+          config.nocoDb.autoCreateColumns
+        ),
+        promotedTags: this.getAppSetting(
+          "nocodb.promotedTags",
+          config.nocoDb.promotedTags
+        ),
+      });
+    },
+
+    saveNocoDbConfig(input) {
+      const current = this.getNocoDbConfig();
+      const next = sanitizeNocoDbConfig({
+        ...current,
+        ...input,
+        apiToken:
+          input.apiToken == null || input.apiToken === ""
+            ? current.apiToken
+            : input.apiToken,
+      });
+
+      this.setAppSettings({
+        "nocodb.baseUrl": next.baseUrl,
+        "nocodb.apiToken": next.apiToken,
+        "nocodb.baseId": next.baseId,
+        "nocodb.tableId": next.tableId,
+        "nocodb.autoSyncOnCompletion": next.autoSyncOnCompletion,
+        "nocodb.autoCreateColumns": next.autoCreateColumns,
+        "nocodb.promotedTags": next.promotedTags,
+      });
+
+      return next;
+    },
+
+    getNocoDbSyncState(jobId) {
+      const row = db
+        .prepare(
+          `
+            SELECT *
+            FROM nocodb_sync_state
+            WHERE job_id = ?
+          `
+        )
+        .get(jobId);
+
+      return row ? deserializeSyncStateRow(row) : defaultSyncState(jobId);
+    },
+
+    markNocoDbSyncStarted(jobId) {
+      const timestamp = nowIso();
+      db.prepare(
+        `
+          INSERT INTO nocodb_sync_state (
+            job_id, last_status, last_message, last_started_at, last_finished_at
+          ) VALUES (
+            @jobId, 'running', 'Sync in progress.', @timestamp, NULL
+          )
+          ON CONFLICT(job_id) DO UPDATE SET
+            last_status = 'running',
+            last_message = 'Sync in progress.',
+            last_started_at = excluded.last_started_at,
+            last_finished_at = NULL
+        `
+      ).run({ jobId, timestamp });
+    },
+
+    markNocoDbSyncSuccess(jobId, input) {
+      const timestamp = nowIso();
+      db.prepare(
+        `
+          INSERT INTO nocodb_sync_state (
+            job_id, last_synced_lead_id, last_synced_at, last_status,
+            last_message, last_started_at, last_finished_at, synced_record_count
+          ) VALUES (
+            @jobId, @lastSyncedLeadId, @timestamp, 'success',
+            @message, COALESCE(@startedAt, @timestamp), @timestamp, @syncedRecordCount
+          )
+          ON CONFLICT(job_id) DO UPDATE SET
+            last_synced_lead_id = @lastSyncedLeadId,
+            last_synced_at = @timestamp,
+            last_status = 'success',
+            last_message = @message,
+            last_finished_at = @timestamp,
+            synced_record_count = COALESCE(nocodb_sync_state.synced_record_count, 0) + @syncedRecordCount
+        `
+      ).run({
+        jobId,
+        lastSyncedLeadId: input.lastSyncedLeadId || 0,
+        syncedRecordCount: input.syncedRecordCount || 0,
+        message: input.message || "Sync completed.",
+        startedAt: input.startedAt || null,
+        timestamp,
+      });
+    },
+
+    markNocoDbSyncFailure(jobId, message) {
+      const timestamp = nowIso();
+      db.prepare(
+        `
+          INSERT INTO nocodb_sync_state (
+            job_id, last_status, last_message, last_started_at, last_finished_at
+          ) VALUES (
+            @jobId, 'failed', @message, @timestamp, @timestamp
+          )
+          ON CONFLICT(job_id) DO UPDATE SET
+            last_status = 'failed',
+            last_message = @message,
+            last_finished_at = @timestamp
+        `
+      ).run({ jobId, message, timestamp });
+    },
+
     cancelJob(jobId) {
       const timestamp = nowIso();
       db.transaction(() => {
@@ -514,6 +696,25 @@ function createStore(config) {
           `
         ).run({ jobId, timestamp });
       })();
+
+      this.refreshJobStats(jobId);
+      return this.getJob(jobId);
+    },
+
+    getJobLeadsAfterId(jobId, leadId = 0, { limit = 100 } = {}) {
+      return db
+        .prepare(
+          `
+            SELECT *
+            FROM leads
+            WHERE job_id = ?
+              AND id > ?
+            ORDER BY id ASC
+            LIMIT ?
+          `
+        )
+        .all(jobId, leadId, limit)
+        .map(deserializeLeadRow);
     },
 
     claimNextShard() {
@@ -909,6 +1110,68 @@ function deserializeLeadRow(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function defaultSyncState(jobId) {
+  return {
+    jobId,
+    lastSyncedLeadId: 0,
+    lastSyncedAt: null,
+    lastStatus: "idle",
+    lastMessage: null,
+    lastStartedAt: null,
+    lastFinishedAt: null,
+    syncedRecordCount: 0,
+  };
+}
+
+function deserializeSyncStateRow(row) {
+  return {
+    jobId: row.job_id,
+    lastSyncedLeadId: row.last_synced_lead_id || 0,
+    lastSyncedAt: row.last_synced_at,
+    lastStatus: row.last_status,
+    lastMessage: row.last_message,
+    lastStartedAt: row.last_started_at,
+    lastFinishedAt: row.last_finished_at,
+    syncedRecordCount: row.synced_record_count || 0,
+  };
+}
+
+function sanitizeNocoDbConfig(input) {
+  return {
+    baseUrl: cleanString(input.baseUrl),
+    apiToken: cleanString(input.apiToken),
+    baseId: cleanString(input.baseId),
+    tableId: cleanString(input.tableId),
+    autoSyncOnCompletion: Boolean(input.autoSyncOnCompletion),
+    autoCreateColumns:
+      input.autoCreateColumns == null ? true : Boolean(input.autoCreateColumns),
+    promotedTags: normalizeStringArray(input.promotedTags),
+  };
+}
+
+function normalizeStringArray(input) {
+  const values = Array.isArray(input)
+    ? input
+    : String(input || "")
+        .split(",")
+        .map((item) => item.trim());
+
+  return [...new Set(values.filter(Boolean))];
+}
+
+function cleanString(value) {
+  const normalized = String(value || "").trim();
+  return normalized || null;
+}
+
+function parseJsonOrFallback(value, fallback) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
 }
 
 module.exports = {

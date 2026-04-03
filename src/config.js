@@ -20,6 +20,35 @@ function floatFromEnv(name, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function boolFromEnv(name, fallback) {
+  const value = process.env[name];
+  if (value == null || value === "") {
+    return fallback;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
+}
+
+function arrayFromEnv(name, fallback = []) {
+  const value = process.env[name];
+  if (value == null || value === "") {
+    return fallback;
+  }
+
+  return String(value)
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 const dataDir = process.env.DATA_DIR || path.join(process.cwd(), "data");
 
 module.exports = {
@@ -51,4 +80,13 @@ module.exports = {
   adminPassword: process.env.ADMIN_PASSWORD || null,
   sessionCookieName: process.env.SESSION_COOKIE_NAME || "osm_scraper_session",
   sessionTtlHours: intFromEnv("SESSION_TTL_HOURS", 24),
+  nocoDb: {
+    baseUrl: process.env.NOCODB_BASE_URL || null,
+    apiToken: process.env.NOCODB_API_TOKEN || null,
+    baseId: process.env.NOCODB_BASE_ID || null,
+    tableId: process.env.NOCODB_TABLE_ID || null,
+    autoSyncOnCompletion: boolFromEnv("NOCODB_AUTO_SYNC_ON_COMPLETION", false),
+    autoCreateColumns: boolFromEnv("NOCODB_AUTO_CREATE_COLUMNS", true),
+    promotedTags: arrayFromEnv("NOCODB_PROMOTED_TAGS", []),
+  },
 };

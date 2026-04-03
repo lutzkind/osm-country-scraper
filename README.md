@@ -14,21 +14,20 @@ Autonomous country-scale OpenStreetMap scraper built for long-running public API
 - exposes a built-in operator dashboard for long-running country jobs
 - can sync normalized lead output into NocoDB from the dashboard or automatically on job completion
 
-## Supported keywords
+## Keyword input
 
-- `restaurants`
-- `hotels`
-- `cafe`
-- `bar`
-- `hostel`
-- `guest_house`
+The dashboard/API now accepts any free-text keyword.
 
-You can also send a custom `selectors` array:
+- Common hospitality keywords such as `restaurants`, `hotels`, `cafe`, `bar`, `hostel`, and `guest_house` still use exact built-in mappings.
+- Any other keyword falls back to broad matching across business-related OSM keys such as `amenity`, `tourism`, `shop`, `office`, `craft`, `healthcare`, `leisure`, `sport`, and `cuisine`.
+- You can also force exact or regex selector logic directly in the keyword field with `key=value` or `key~regex`, or send a custom `selectors` array over the API.
+
+Example custom selectors:
 
 ```json
 {
   "country": "United States",
-  "keyword": "custom",
+  "keyword": "tourism=hotel, tourism=guest_house",
   "selectors": [
     { "key": "tourism", "value": "hotel" },
     { "key": "tourism", "value": "guest_house" }

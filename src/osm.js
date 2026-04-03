@@ -13,11 +13,15 @@ function buildOverpassQuery(bbox, selectors, timeoutSeconds) {
     const escapedKey = selector.key.replace(/"/g, '\\"');
     const escapedValue = selector.value.replace(/"/g, '\\"');
     const bboxClause = `(${bbox.south},${bbox.west},${bbox.north},${bbox.east})`;
+    const valueClause =
+      selector.match === "regex"
+        ? `["${escapedKey}"~"${escapedValue}",i]`
+        : `["${escapedKey}"="${escapedValue}"]`;
 
     return [
-      `node["${escapedKey}"="${escapedValue}"]${bboxClause};`,
-      `way["${escapedKey}"="${escapedValue}"]${bboxClause};`,
-      `relation["${escapedKey}"="${escapedValue}"]${bboxClause};`,
+      `node${valueClause}${bboxClause};`,
+      `way${valueClause}${bboxClause};`,
+      `relation${valueClause}${bboxClause};`,
     ];
   });
 
@@ -190,8 +194,22 @@ function mapElementToLead(element, geometry, bbox) {
     osmType: element.type,
     osmId: String(element.id),
     name: tags.name || "",
-    category: tags.amenity || tags.tourism || tags.shop || "",
-    subcategory: tags.cuisine || tags["tourism:type"] || "",
+    category:
+      tags.amenity ||
+      tags.tourism ||
+      tags.shop ||
+      tags.office ||
+      tags.craft ||
+      tags.healthcare ||
+      tags.leisure ||
+      tags.sport ||
+      "",
+    subcategory:
+      tags.cuisine ||
+      tags["tourism:type"] ||
+      tags.brand ||
+      tags.operator ||
+      "",
     website: normalizeWebsite(tags.website || tags["contact:website"]),
     phone: normalizePhone(tags.phone || tags["contact:phone"]),
     email: normalizeEmail(tags.email || tags["contact:email"]),

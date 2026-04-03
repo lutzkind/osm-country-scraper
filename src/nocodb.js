@@ -262,10 +262,15 @@ function buildRecord(job, lead, promotedTags, availableFields) {
 }
 
 async function listColumns(settings) {
-  const payload = await apiRequest(
-    settings,
-    `/api/v2/meta/tables/${encodeURIComponent(settings.tableId)}/columns`
-  );
+  const payload = await apiRequestFallback(settings, [
+    {
+      pathname: `/api/v2/meta/tables/${encodeURIComponent(settings.tableId)}/columns`,
+    },
+    {
+      pathname: `/api/v1/db/meta/tables/${encodeURIComponent(settings.tableId)}`,
+      transform: (result) => result?.columns || [],
+    },
+  ]);
 
   if (Array.isArray(payload)) {
     return payload;
@@ -287,16 +292,20 @@ async function createColumn(settings, field) {
     type: field.type,
   };
 
-  return apiRequest(
-    settings,
-    `/api/v2/base/${encodeURIComponent(settings.baseId)}/table/${encodeURIComponent(
-      settings.tableId
-    )}/column`,
+  return apiRequestFallback(settings, [
     {
+      pathname: `/api/v2/base/${encodeURIComponent(settings.baseId)}/table/${encodeURIComponent(
+        settings.tableId
+      )}/column`,
       method: "POST",
       body: payload,
-    }
-  );
+    },
+    {
+      pathname: `/api/v1/db/meta/tables/${encodeURIComponent(settings.tableId)}/columns`,
+      method: "POST",
+      body: payload,
+    },
+  ]);
 }
 
 async function createRecords(settings, records) {
@@ -304,14 +313,27 @@ async function createRecords(settings, records) {
     return null;
   }
 
-  return apiRequest(
-    settings,
-    `/api/v2/tables/${encodeURIComponent(settings.tableId)}/records`,
+  return apiRequestFallback(settings, [
     {
+      pathname: `/api/v2/tables/${encodeURIComponent(settings.tableId)}/records`,
       method: "POST",
       body: records,
-    }
-  );
+    },
+    {
+      pathname: `/api/v1/db/data/noco/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(
+        settings.tableId
+      )}`,
+      method: "POST",
+      body: records,
+    },
+    {
+      pathname: `/api/v1/db/data/noco/${encodeURIComponent(settings.baseId)}/${encodeURIComponent(
+        settings.tableId
+      )}`,
+      method: "POST",
+      body: { list: records },
+    },
+  ]);
 }
 
 async function apiRequest(settings, pathname, options = {}) {
@@ -339,6 +361,26 @@ async function apiRequest(settings, pathname, options = {}) {
   }
 
   return payload;
+}
+
+async function apiRequestFallback(settings, attempts) {
+  let lastError = null;
+
+  for (const attempt of attempts) {
+    try {
+      const result = await apiRequest(settings, attempt.pathname, attempt);
+      return typeof attempt.transform === "function"
+        ? attempt.transform(result)
+        : result;
+    } catch (error) {
+      lastError = error;
+      if (![400, 404].includes(error.statusCode)) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || createHttpError(500, "NocoDB request failed.");
 }
 
 function joinUrl(baseUrl, pathname) {

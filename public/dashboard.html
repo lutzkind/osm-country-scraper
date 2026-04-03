@@ -260,7 +260,7 @@
           <form id="create-job-form">
             <input id="country" name="country" placeholder="Country, e.g. United States" required>
             <input id="keyword" name="keyword" placeholder="Keyword, e.g. hotels or restaurants" required>
-            <div class="subtle">Free-text keyword field. Current backend mappings support values like hotels, restaurants, cafe, bar, hostel, and guest_house.</div>
+            <div class="subtle">Any free-text keyword is accepted. Common hospitality terms use precise mappings; everything else falls back to broad OSM tag matching. You can also use explicit selectors like <code>amenity=restaurant</code> or <code>cuisine~sushi</code>.</div>
             <button type="submit">Start scrape job</button>
           </form>
           <div id="create-job-message" class="message"></div>

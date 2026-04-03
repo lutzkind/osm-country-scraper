@@ -104,10 +104,12 @@
         box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.25);
       }
 
-      .job-meta {
+      .job-meta,
+      .header-row {
         display: flex;
         justify-content: space-between;
         gap: 12px;
+        align-items: center;
         margin-bottom: 6px;
       }
 
@@ -194,6 +196,10 @@
         color: var(--muted);
       }
 
+      .error {
+        color: var(--bad);
+      }
+
       .empty {
         color: var(--muted);
         padding: 20px 0;
@@ -220,22 +226,24 @@
     <div class="layout">
       <aside class="sidebar">
         <div class="panel">
-          <h1>OSM scraper</h1>
-          <p class="subtle">Create jobs, track shard progress, and inspect live lead growth without using raw API calls.</p>
+          <div class="header-row">
+            <div>
+              <h1>OSM scraper</h1>
+              <p class="subtle">Create jobs, track shard progress, and inspect live lead growth without raw API calls.</p>
+            </div>
+            <div>
+              <div id="auth-username" class="subtle"></div>
+              <button id="logout-button" type="button" class="secondary">Logout</button>
+            </div>
+          </div>
         </div>
 
         <div class="panel">
           <h2>Create job</h2>
           <form id="create-job-form">
             <input id="country" name="country" placeholder="Country, e.g. United States" required>
-            <select id="keyword" name="keyword" required>
-              <option value="restaurants">restaurants</option>
-              <option value="hotels">hotels</option>
-              <option value="cafe">cafe</option>
-              <option value="bar">bar</option>
-              <option value="hostel">hostel</option>
-              <option value="guest_house">guest_house</option>
-            </select>
+            <input id="keyword" name="keyword" placeholder="Keyword, e.g. hotels or restaurants" required>
+            <div class="subtle">Free-text keyword field. Current backend mappings support values like hotels, restaurants, cafe, bar, hostel, and guest_house.</div>
             <button type="submit">Start scrape job</button>
           </form>
           <div id="create-job-message" class="message"></div>
@@ -354,6 +362,8 @@
       };
 
       const els = {
+        authUsername: document.getElementById("auth-username"),
+        logoutButton: document.getElementById("logout-button"),
         createJobForm: document.getElementById("create-job-form"),
         createJobMessage: document.getElementById("create-job-message"),
         jobList: document.getElementById("job-list"),
@@ -394,6 +404,30 @@
         return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
       }
 
+      async function requestJson(url, options) {
+        const response = await fetch(url, options);
+        const payload = await response.json().catch(() => ({}));
+
+        if (response.status === 401) {
+          const next = encodeURIComponent(window.location.pathname + window.location.search);
+          window.location.href = `/login?next=${next}`;
+          throw new Error("Authentication required.");
+        }
+
+        if (!response.ok) {
+          throw new Error(payload.error || `Request failed: ${response.status}`);
+        }
+
+        return payload;
+      }
+
+      async function loadSession() {
+        const payload = await requestJson("/api/auth/session");
+        els.authUsername.textContent = payload.username
+          ? `Signed in as ${payload.username}`
+          : "";
+      }
+
       function renderJobs() {
         if (!state.jobs.length) {
           els.jobList.innerHTML = `<div class="empty">No jobs yet.</div>`;
@@ -421,15 +455,6 @@
             refreshSelectedJob();
           });
         }
-      }
-
-      async function requestJson(url, options) {
-        const response = await fetch(url, options);
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload.error || `Request failed: ${response.status}`);
-        }
-        return payload;
       }
 
       async function loadJobs() {
@@ -563,16 +588,20 @@
 
       async function fullRefresh() {
         try {
+          await loadSession();
           await loadJobs();
           await refreshSelectedJob();
         } catch (error) {
           els.createJobMessage.textContent = error.message;
+          els.createJobMessage.classList.add("error");
         }
       }
 
       els.createJobForm.addEventListener("submit", async (event) => {
         event.preventDefault();
+        els.createJobMessage.classList.remove("error");
         els.createJobMessage.textContent = "Creating job...";
+
         try {
           const payload = await requestJson("/jobs", {
             method: "POST",
@@ -582,31 +611,43 @@
               keyword: document.getElementById("keyword").value,
             }),
           });
+
           state.selectedJobId = payload.job.id;
           els.createJobMessage.innerHTML = `Started job <code>${escapeHtml(payload.job.id)}</code>.`;
           document.getElementById("country").value = "";
+          document.getElementById("keyword").value = "";
           await fullRefresh();
         } catch (error) {
           els.createJobMessage.textContent = error.message;
+          els.createJobMessage.classList.add("error");
         }
       });
 
       els.refreshJobs.addEventListener("click", () => {
         fullRefresh().catch((error) => {
           els.createJobMessage.textContent = error.message;
+          els.createJobMessage.classList.add("error");
         });
       });
 
       els.refreshSelected.addEventListener("click", () => {
         refreshSelectedJob().catch((error) => {
           els.createJobMessage.textContent = error.message;
+          els.createJobMessage.classList.add("error");
         });
       });
 
       els.shardStatusFilter.addEventListener("change", () => {
         refreshSelectedJob().catch((error) => {
           els.createJobMessage.textContent = error.message;
+          els.createJobMessage.classList.add("error");
         });
+      });
+
+      els.logoutButton.addEventListener("click", async () => {
+        await fetch("/api/auth/logout", { method: "POST" });
+        const next = encodeURIComponent(window.location.pathname + window.location.search);
+        window.location.href = `/login?next=${next}`;
       });
 
       fullRefresh();

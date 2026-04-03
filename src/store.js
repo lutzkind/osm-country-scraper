@@ -77,9 +77,21 @@ function createStore(config) {
       UNIQUE(job_id, osm_type, osm_id),
       FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      username TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires_at
+      ON sessions(expires_at);
   `);
 
   resetRunningShards(db);
+  cleanupExpiredSessions(db);
 
   return {
     db,
@@ -405,6 +417,77 @@ function createStore(config) {
           elapsedHours: Number(elapsedHours.toFixed(2)),
         },
       };
+    },
+
+    createSession({ id, username, expiresAt }) {
+      const timestamp = nowIso();
+      db.prepare(
+        `
+          INSERT INTO sessions (
+            id, username, expires_at, created_at, last_seen_at
+          ) VALUES (
+            @id, @username, @expiresAt, @timestamp, @timestamp
+          )
+        `
+      ).run({
+        id,
+        username,
+        expiresAt,
+        timestamp,
+      });
+    },
+
+    getSession(sessionId) {
+      const row = db
+        .prepare(
+          `
+            SELECT *
+            FROM sessions
+            WHERE id = ?
+          `
+        )
+        .get(sessionId);
+
+      if (!row) {
+        return null;
+      }
+
+      if (new Date(row.expires_at).getTime() <= Date.now()) {
+        db.prepare(`DELETE FROM sessions WHERE id = ?`).run(sessionId);
+        return null;
+      }
+
+      return {
+        id: row.id,
+        username: row.username,
+        expiresAt: row.expires_at,
+        createdAt: row.created_at,
+        lastSeenAt: row.last_seen_at,
+      };
+    },
+
+    touchSession(sessionId, expiresAt) {
+      const timestamp = nowIso();
+      db.prepare(
+        `
+          UPDATE sessions
+          SET expires_at = @expiresAt,
+              last_seen_at = @timestamp
+          WHERE id = @id
+        `
+      ).run({
+        id: sessionId,
+        expiresAt,
+        timestamp,
+      });
+    },
+
+    deleteSession(sessionId) {
+      db.prepare(`DELETE FROM sessions WHERE id = ?`).run(sessionId);
+    },
+
+    cleanupExpiredSessions() {
+      cleanupExpiredSessions(db);
     },
 
     cancelJob(jobId) {
@@ -752,6 +835,15 @@ function resetRunningShards(db) {
       WHERE status = 'running'
     `
   ).run({ timestamp });
+}
+
+function cleanupExpiredSessions(db) {
+  db.prepare(
+    `
+      DELETE FROM sessions
+      WHERE expires_at <= @timestamp
+    `
+  ).run({ timestamp: nowIso() });
 }
 
 function deserializeJobRow(row) {

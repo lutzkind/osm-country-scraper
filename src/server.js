@@ -2,9 +2,12 @@ const express = require("express");
 const path = require("path");
 const { resolveSelectors } = require("./keywords");
 const { createJobId } = require("./worker");
+const { createAuth } = require("./auth");
 
 function createApp({ store, config }) {
   const app = express();
+  const auth = createAuth({ store, config });
+
   app.use(express.json({ limit: "1mb" }));
   app.use("/assets", express.static(path.join(__dirname, "..", "public")));
 
@@ -13,12 +16,43 @@ function createApp({ store, config }) {
   });
 
   app.get("/", (req, res) => {
-    res.redirect("/dashboard");
+    if (!auth.isConfigured()) {
+      return res.redirect("/login");
+    }
+
+    const session = auth.currentSession(req);
+    return res.redirect(session ? "/dashboard" : "/login");
   });
 
-  app.get("/dashboard", (_req, res) => {
+  app.get("/login", (req, res) => {
+    if (auth.isConfigured() && auth.currentSession(req)) {
+      return res.redirect("/dashboard");
+    }
+
+    res.sendFile(path.join(__dirname, "..", "public", "login.html"));
+  });
+
+  app.post("/api/auth/login", (req, res) => {
+    auth.handleLogin(req, res);
+  });
+
+  app.post("/api/auth/logout", withAuth(auth), (req, res) => {
+    auth.handleLogout(req, res);
+  });
+
+  app.get("/api/auth/session", withAuth(auth), (req, res) => {
+    res.json({
+      authenticated: true,
+      username: req.authSession.username,
+      expiresAt: req.authSession.expiresAt,
+    });
+  });
+
+  app.get("/dashboard", withAuth(auth), (_req, res) => {
     res.sendFile(path.join(__dirname, "..", "public", "dashboard.html"));
   });
+
+  app.use("/jobs", withAuth(auth));
 
   app.get("/jobs", (_req, res) => {
     res.json({ jobs: store.listJobs() });
@@ -39,12 +73,12 @@ function createApp({ store, config }) {
       const id = createJobId();
       store.createJob({ id, country, keyword, selectors });
 
-      res.status(202).json({
+      return res.status(202).json({
         job: store.getJob(id),
         links: buildLinks(req, config, id),
       });
     } catch (error) {
-      next(error);
+      return next(error);
     }
   });
 
@@ -54,11 +88,9 @@ function createApp({ store, config }) {
       return res.status(404).json({ error: "Job not found." });
     }
 
-    const stats = store.getJobStats(job.id);
-
-    res.json({
+    return res.json({
       job,
-      stats,
+      stats: store.getJobStats(job.id),
       links: buildLinks(req, config, job.id),
     });
   });
@@ -69,7 +101,7 @@ function createApp({ store, config }) {
       return res.status(404).json({ error: "Job not found." });
     }
 
-    res.json({
+    return res.json({
       job,
       stats: store.getJobStats(job.id),
       links: buildLinks(req, config, job.id),
@@ -89,7 +121,7 @@ function createApp({ store, config }) {
     const offset = Math.max(Number.parseInt(req.query.offset, 10) || 0, 0);
     const status = req.query.status ? String(req.query.status).trim() : null;
 
-    res.json({
+    return res.json({
       jobId: job.id,
       status,
       limit,
@@ -110,7 +142,7 @@ function createApp({ store, config }) {
       250
     );
 
-    res.json({
+    return res.json({
       jobId: job.id,
       limit,
       errors: store.getJobErrors(job.id, { limit }),
@@ -123,13 +155,10 @@ function createApp({ store, config }) {
       return res.status(404).json({ error: "Job not found." });
     }
 
-    const limit = Math.min(
-      Number.parseInt(req.query.limit, 10) || 100,
-      1000
-    );
-    const offset = Number.parseInt(req.query.offset, 10) || 0;
+    const limit = Math.min(Number.parseInt(req.query.limit, 10) || 100, 1000);
+    const offset = Math.max(Number.parseInt(req.query.offset, 10) || 0, 0);
 
-    res.json({
+    return res.json({
       jobId: job.id,
       limit,
       offset,
@@ -144,7 +173,7 @@ function createApp({ store, config }) {
     }
 
     store.cancelJob(job.id);
-    res.json({ job: store.getJob(job.id) });
+    return res.json({ job: store.getJob(job.id) });
   });
 
   app.get("/jobs/:jobId/download", (req, res) => {
@@ -164,7 +193,7 @@ function createApp({ store, config }) {
       });
     }
 
-    res.download(filePath);
+    return res.download(filePath);
   });
 
   app.use((error, _req, res, _next) => {
@@ -177,19 +206,23 @@ function createApp({ store, config }) {
   return app;
 }
 
+function withAuth(auth) {
+  return (req, res, next) => auth.requireAuth(req, res, next);
+}
+
 function buildLinks(req, config, jobId) {
   const baseUrl =
     config.publicBaseUrl || `${req.protocol}://${req.get("host")}`;
 
-    return {
-      self: `${baseUrl}/jobs/${jobId}`,
-      dashboard: `${baseUrl}/dashboard?jobId=${jobId}`,
-      stats: `${baseUrl}/jobs/${jobId}/stats`,
-      shards: `${baseUrl}/jobs/${jobId}/shards`,
-      errors: `${baseUrl}/jobs/${jobId}/errors`,
-      leads: `${baseUrl}/jobs/${jobId}/leads`,
-      csv: `${baseUrl}/jobs/${jobId}/download?format=csv`,
-      json: `${baseUrl}/jobs/${jobId}/download?format=json`,
+  return {
+    self: `${baseUrl}/jobs/${jobId}`,
+    dashboard: `${baseUrl}/dashboard?jobId=${jobId}`,
+    stats: `${baseUrl}/jobs/${jobId}/stats`,
+    shards: `${baseUrl}/jobs/${jobId}/shards`,
+    errors: `${baseUrl}/jobs/${jobId}/errors`,
+    leads: `${baseUrl}/jobs/${jobId}/leads`,
+    csv: `${baseUrl}/jobs/${jobId}/download?format=csv`,
+    json: `${baseUrl}/jobs/${jobId}/download?format=json`,
     cancel: `${baseUrl}/jobs/${jobId}/cancel`,
   };
 }

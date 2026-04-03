@@ -47,4 +47,8 @@ module.exports = {
   resultSplitThreshold: intFromEnv("RESULT_SPLIT_THRESHOLD", 250),
   minShardWidthDeg: floatFromEnv("MIN_SHARD_WIDTH_DEG", 0.1),
   minShardHeightDeg: floatFromEnv("MIN_SHARD_HEIGHT_DEG", 0.1),
+  adminUsername: process.env.ADMIN_USERNAME || null,
+  adminPassword: process.env.ADMIN_PASSWORD || null,
+  sessionCookieName: process.env.SESSION_COOKIE_NAME || "osm_scraper_session",
+  sessionTtlHours: intFromEnv("SESSION_TTL_HOURS", 24),
 };

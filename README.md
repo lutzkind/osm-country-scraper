@@ -43,10 +43,13 @@ Open the built-in dashboard in a browser:
 
 `http://localhost:3000/dashboard`
 
+The dashboard is protected by a username/password login screen backed by server-side sessions in SQLite.
+
 ### Create job
 
 ```bash
 curl -X POST http://localhost:3000/jobs \
+  -b cookies.txt \
   -H 'Content-Type: application/json' \
   -d '{"country":"United States","keyword":"restaurants"}'
 ```
@@ -54,7 +57,7 @@ curl -X POST http://localhost:3000/jobs \
 ### Get job
 
 ```bash
-curl http://localhost:3000/jobs/<jobId>
+curl -b cookies.txt http://localhost:3000/jobs/<jobId>
 ```
 
 This now includes derived monitoring stats such as shard state counts, recent lead growth, and throughput.
@@ -62,39 +65,39 @@ This now includes derived monitoring stats such as shard state counts, recent le
 ### Get job stats
 
 ```bash
-curl http://localhost:3000/jobs/<jobId>/stats
+curl -b cookies.txt http://localhost:3000/jobs/<jobId>/stats
 ```
 
 ### List shards
 
 ```bash
-curl 'http://localhost:3000/jobs/<jobId>/shards?limit=50&offset=0'
-curl 'http://localhost:3000/jobs/<jobId>/shards?status=retry&limit=50&offset=0'
+curl -b cookies.txt 'http://localhost:3000/jobs/<jobId>/shards?limit=50&offset=0'
+curl -b cookies.txt 'http://localhost:3000/jobs/<jobId>/shards?status=retry&limit=50&offset=0'
 ```
 
 ### Recent shard errors
 
 ```bash
-curl 'http://localhost:3000/jobs/<jobId>/errors?limit=25'
+curl -b cookies.txt 'http://localhost:3000/jobs/<jobId>/errors?limit=25'
 ```
 
 ### List leads
 
 ```bash
-curl 'http://localhost:3000/jobs/<jobId>/leads?limit=100&offset=0'
+curl -b cookies.txt 'http://localhost:3000/jobs/<jobId>/leads?limit=100&offset=0'
 ```
 
 ### Download artifacts
 
 ```bash
-curl -L 'http://localhost:3000/jobs/<jobId>/download?format=csv' -o leads.csv
-curl -L 'http://localhost:3000/jobs/<jobId>/download?format=json' -o leads.json
+curl -b cookies.txt -L 'http://localhost:3000/jobs/<jobId>/download?format=csv' -o leads.csv
+curl -b cookies.txt -L 'http://localhost:3000/jobs/<jobId>/download?format=json' -o leads.json
 ```
 
 ### Cancel job
 
 ```bash
-curl -X POST http://localhost:3000/jobs/<jobId>/cancel
+curl -b cookies.txt -X POST http://localhost:3000/jobs/<jobId>/cancel
 ```
 
 ## Environment
@@ -115,12 +118,16 @@ curl -X POST http://localhost:3000/jobs/<jobId>/cancel
 - `RETRY_BASE_DELAY_MS` exponential backoff base
 - `RESULT_SPLIT_THRESHOLD` split shards if a successful shard returns at least this many elements
 - `MIN_SHARD_WIDTH_DEG` and `MIN_SHARD_HEIGHT_DEG` guard against endless subdivision
+- `ADMIN_USERNAME` dashboard admin username
+- `ADMIN_PASSWORD` dashboard admin password
+- `SESSION_COOKIE_NAME` cookie name for authenticated sessions
+- `SESSION_TTL_HOURS` session lifetime in hours
 
 ## Run locally
 
 ```bash
 npm install
-PORT=8092 node index.js
+ADMIN_USERNAME=admin ADMIN_PASSWORD=secret123 PORT=8092 node index.js
 ```
 
 For public Nominatim usage, set `USER_AGENT` to a real, contactable identifier if you deploy this anywhere else. Public Nominatim can reject generic placeholder identities.
@@ -145,3 +152,4 @@ docker run -p 3000:3000 -v $(pwd)/data:/app/data osm-country-scraper
 - Country-scale public Overpass runs can take days or weeks.
 - Website values come from OSM tags such as `website` and `contact:website`.
 - Long-running progress is best interpreted through shard states rather than only job status. A country job can keep splitting into finer shards as dense areas are discovered.
+- The dashboard and job APIs are intentionally protected behind the same login so the UI cannot be bypassed by unauthenticated requests.

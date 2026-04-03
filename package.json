@@ -1,0 +1,22 @@
+{
+  "name": "osm-country-scraper",
+  "version": "1.0.0",
+  "description": "Autonomous country-scale OpenStreetMap scraper using public Overpass and Nominatim APIs.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "openstreetmap",
+    "overpass",
+    "nominatim",
+    "scraper"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@turf/turf": "^7.3.4",
+    "better-sqlite3": "^12.8.0",
+    "express": "^5.2.1"
+  }
+}

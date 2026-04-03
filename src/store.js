@@ -1,0 +1,622 @@
+const fs = require("fs");
+const path = require("path");
+const Database = require("better-sqlite3");
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function createStore(config) {
+  fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
+  fs.mkdirSync(config.exportsDir, { recursive: true });
+
+  const db = new Database(config.dbPath);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS jobs (
+      id TEXT PRIMARY KEY,
+      country TEXT NOT NULL,
+      keyword TEXT NOT NULL,
+      selectors_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      message TEXT,
+      country_name TEXT,
+      country_code TEXT,
+      country_bbox_json TEXT,
+      country_geometry_json TEXT,
+      total_shards INTEGER NOT NULL DEFAULT 0,
+      completed_shards INTEGER NOT NULL DEFAULT 0,
+      failed_shards INTEGER NOT NULL DEFAULT 0,
+      lead_count INTEGER NOT NULL DEFAULT 0,
+      artifact_csv_path TEXT,
+      artifact_json_path TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS shards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT NOT NULL,
+      bbox_json TEXT NOT NULL,
+      depth INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      result_count INTEGER NOT NULL DEFAULT 0,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      next_run_at TEXT NOT NULL,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_shards_status_next_run
+      ON shards(status, next_run_at);
+
+    CREATE TABLE IF NOT EXISTS leads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT NOT NULL,
+      osm_type TEXT NOT NULL,
+      osm_id TEXT NOT NULL,
+      name TEXT,
+      category TEXT,
+      subcategory TEXT,
+      website TEXT,
+      phone TEXT,
+      email TEXT,
+      address TEXT,
+      lat REAL NOT NULL,
+      lon REAL NOT NULL,
+      source_bbox_json TEXT NOT NULL,
+      tags_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(job_id, osm_type, osm_id),
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    );
+  `);
+
+  resetRunningShards(db);
+
+  return {
+    db,
+    createJob(input) {
+      const timestamp = nowIso();
+      db.prepare(
+        `
+          INSERT INTO jobs (
+            id, country, keyword, selectors_json, status, message,
+            country_name, country_code, country_bbox_json, country_geometry_json,
+            created_at, updated_at
+          ) VALUES (
+            @id, @country, @keyword, @selectorsJson, 'pending', 'Queued',
+            NULL, NULL, NULL, NULL, @timestamp, @timestamp
+          )
+        `
+      ).run({
+        id: input.id,
+        country: input.country,
+        keyword: input.keyword,
+        selectorsJson: JSON.stringify(input.selectors),
+        timestamp,
+      });
+    },
+
+    seedJob(jobId, countryData) {
+      const timestamp = nowIso();
+      db.transaction(() => {
+        db.prepare(
+          `
+            UPDATE jobs
+            SET status = 'running',
+                message = 'Running',
+                country_name = @countryName,
+                country_code = @countryCode,
+                country_bbox_json = @bboxJson,
+                country_geometry_json = @geometryJson,
+                started_at = COALESCE(started_at, @timestamp),
+                updated_at = @timestamp
+            WHERE id = @jobId
+          `
+        ).run({
+          jobId,
+          countryName: countryData.displayName,
+          countryCode: countryData.countryCode,
+          bboxJson: JSON.stringify(countryData.bbox),
+          geometryJson: JSON.stringify(countryData.geometry?.geometry || null),
+          timestamp,
+        });
+
+        db.prepare(
+          `
+            INSERT INTO shards (
+              job_id, bbox_json, depth, status, next_run_at,
+              created_at, updated_at
+            ) VALUES (
+              @jobId, @bboxJson, 0, 'pending', @timestamp, @timestamp, @timestamp
+            )
+          `
+        ).run({
+          jobId,
+          bboxJson: JSON.stringify(countryData.bbox),
+          timestamp,
+        });
+      })();
+
+      this.refreshJobStats(jobId);
+    },
+
+    failJob(jobId, errorMessage) {
+      db.prepare(
+        `
+          UPDATE jobs
+          SET status = 'failed',
+              message = @errorMessage,
+              finished_at = @timestamp,
+              updated_at = @timestamp
+          WHERE id = @jobId
+        `
+      ).run({ jobId, errorMessage, timestamp: nowIso() });
+    },
+
+    listJobs() {
+      return db
+        .prepare(
+          `
+            SELECT *
+            FROM jobs
+            ORDER BY created_at DESC
+          `
+        )
+        .all()
+        .map(deserializeJobRow);
+    },
+
+    getJob(jobId) {
+      const row = db
+        .prepare(
+          `
+            SELECT *
+            FROM jobs
+            WHERE id = ?
+          `
+        )
+        .get(jobId);
+
+      return row ? deserializeJobRow(row) : null;
+    },
+
+    getJobLeads(jobId, { limit = 100, offset = 0 } = {}) {
+      return db
+        .prepare(
+          `
+            SELECT *
+            FROM leads
+            WHERE job_id = ?
+            ORDER BY id ASC
+            LIMIT ?
+            OFFSET ?
+          `
+        )
+        .all(jobId, limit, offset)
+        .map(deserializeLeadRow);
+    },
+
+    cancelJob(jobId) {
+      const timestamp = nowIso();
+      db.transaction(() => {
+        db.prepare(
+          `
+            UPDATE jobs
+            SET status = 'canceled',
+                message = 'Canceled',
+                finished_at = @timestamp,
+                updated_at = @timestamp
+            WHERE id = @jobId
+          `
+        ).run({ jobId, timestamp });
+
+        db.prepare(
+          `
+            UPDATE shards
+            SET status = 'canceled',
+                updated_at = @timestamp
+            WHERE job_id = @jobId
+              AND status IN ('pending', 'retry', 'running')
+          `
+        ).run({ jobId, timestamp });
+      })();
+    },
+
+    claimNextShard() {
+      const timestamp = nowIso();
+      const row = db
+        .prepare(
+          `
+            SELECT s.*
+            FROM shards s
+            JOIN jobs j ON j.id = s.job_id
+            WHERE s.status IN ('pending', 'retry')
+              AND s.next_run_at <= @timestamp
+              AND j.status = 'running'
+            ORDER BY s.updated_at ASC
+            LIMIT 1
+          `
+        )
+        .get({ timestamp });
+
+      if (!row) {
+        return null;
+      }
+
+      db.prepare(
+        `
+          UPDATE shards
+          SET status = 'running',
+              attempt_count = attempt_count + 1,
+              updated_at = @timestamp
+          WHERE id = @id
+        `
+      ).run({ id: row.id, timestamp });
+
+      return this.getShard(row.id);
+    },
+
+    getShard(shardId) {
+      const row = db
+        .prepare(
+          `
+            SELECT *
+            FROM shards
+            WHERE id = ?
+          `
+        )
+        .get(shardId);
+
+      return row ? deserializeShardRow(row) : null;
+    },
+
+    splitShard(shardId, childBBoxes) {
+      const shard = this.getShard(shardId);
+      const timestamp = nowIso();
+
+      db.transaction(() => {
+        db.prepare(
+          `
+            UPDATE shards
+            SET status = 'split',
+                updated_at = @timestamp
+            WHERE id = @id
+          `
+        ).run({ id: shardId, timestamp });
+
+        const insert = db.prepare(
+          `
+            INSERT INTO shards (
+              job_id, bbox_json, depth, status, next_run_at, created_at, updated_at
+            ) VALUES (
+              @jobId, @bboxJson, @depth, 'pending', @timestamp, @timestamp, @timestamp
+            )
+          `
+        );
+
+        for (const bbox of childBBoxes) {
+          insert.run({
+            jobId: shard.jobId,
+            bboxJson: JSON.stringify(bbox),
+            depth: shard.depth + 1,
+            timestamp,
+          });
+        }
+      })();
+
+      this.refreshJobStats(shard.jobId);
+      return shard.jobId;
+    },
+
+    skipShard(shardId, message) {
+      const shard = this.getShard(shardId);
+      db.prepare(
+        `
+          UPDATE shards
+          SET status = 'skipped',
+              last_error = @message,
+              updated_at = @timestamp
+          WHERE id = @id
+        `
+      ).run({ id: shardId, message, timestamp: nowIso() });
+      this.refreshJobStats(shard.jobId);
+      return shard.jobId;
+    },
+
+    completeShard(shardId, leads) {
+      const shard = this.getShard(shardId);
+      const timestamp = nowIso();
+
+      db.transaction(() => {
+        const insert = db.prepare(
+          `
+            INSERT INTO leads (
+              job_id, osm_type, osm_id, name, category, subcategory, website,
+              phone, email, address, lat, lon, source_bbox_json, tags_json,
+              created_at, updated_at
+            ) VALUES (
+              @jobId, @osmType, @osmId, @name, @category, @subcategory, @website,
+              @phone, @email, @address, @lat, @lon, @sourceBBoxJson, @tagsJson,
+              @timestamp, @timestamp
+            )
+            ON CONFLICT(job_id, osm_type, osm_id) DO UPDATE SET
+              name = excluded.name,
+              category = excluded.category,
+              subcategory = excluded.subcategory,
+              website = CASE
+                WHEN COALESCE(leads.website, '') = '' THEN excluded.website
+                ELSE leads.website
+              END,
+              phone = CASE
+                WHEN COALESCE(leads.phone, '') = '' THEN excluded.phone
+                ELSE leads.phone
+              END,
+              email = CASE
+                WHEN COALESCE(leads.email, '') = '' THEN excluded.email
+                ELSE leads.email
+              END,
+              address = CASE
+                WHEN COALESCE(leads.address, '') = '' THEN excluded.address
+                ELSE leads.address
+              END,
+              tags_json = excluded.tags_json,
+              updated_at = excluded.updated_at
+          `
+        );
+
+        for (const lead of leads) {
+          insert.run({
+            jobId: shard.jobId,
+            osmType: lead.osmType,
+            osmId: lead.osmId,
+            name: lead.name,
+            category: lead.category,
+            subcategory: lead.subcategory,
+            website: lead.website,
+            phone: lead.phone,
+            email: lead.email,
+            address: lead.address,
+            lat: lead.lat,
+            lon: lead.lon,
+            sourceBBoxJson: JSON.stringify(lead.bbox),
+            tagsJson: JSON.stringify(lead.tags),
+            timestamp,
+          });
+        }
+
+        db.prepare(
+          `
+            UPDATE shards
+            SET status = 'done',
+                result_count = @resultCount,
+                last_error = NULL,
+                updated_at = @timestamp
+            WHERE id = @id
+          `
+        ).run({
+          id: shardId,
+          resultCount: leads.length,
+          timestamp,
+        });
+      })();
+
+      this.refreshJobStats(shard.jobId);
+      return shard.jobId;
+    },
+
+    retryShard(shardId, errorMessage, delayMs) {
+      const shard = this.getShard(shardId);
+      const nextRunAt = new Date(Date.now() + delayMs).toISOString();
+      db.prepare(
+        `
+          UPDATE shards
+          SET status = 'retry',
+              last_error = @errorMessage,
+              next_run_at = @nextRunAt,
+              updated_at = @timestamp
+          WHERE id = @id
+        `
+      ).run({
+        id: shardId,
+        errorMessage,
+        nextRunAt,
+        timestamp: nowIso(),
+      });
+      this.refreshJobStats(shard.jobId);
+      return shard.jobId;
+    },
+
+    failShard(shardId, errorMessage) {
+      const shard = this.getShard(shardId);
+      db.prepare(
+        `
+          UPDATE shards
+          SET status = 'failed',
+              last_error = @errorMessage,
+              updated_at = @timestamp
+          WHERE id = @id
+        `
+      ).run({ id: shardId, errorMessage, timestamp: nowIso() });
+      this.refreshJobStats(shard.jobId);
+      return shard.jobId;
+    },
+
+    refreshJobStats(jobId) {
+      const shardStats = db
+        .prepare(
+          `
+            SELECT
+              COUNT(*) AS total_shards,
+              SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS completed_shards,
+              SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_shards,
+              SUM(CASE WHEN status IN ('pending', 'retry', 'running') THEN 1 ELSE 0 END) AS unfinished_shards
+            FROM shards
+            WHERE job_id = ?
+          `
+        )
+        .get(jobId);
+
+      const leadStats = db
+        .prepare(
+          `
+            SELECT COUNT(*) AS lead_count
+            FROM leads
+            WHERE job_id = ?
+          `
+        )
+        .get(jobId);
+
+      db.prepare(
+        `
+          UPDATE jobs
+          SET total_shards = @totalShards,
+              completed_shards = @completedShards,
+              failed_shards = @failedShards,
+              lead_count = @leadCount,
+              updated_at = @timestamp
+          WHERE id = @jobId
+        `
+      ).run({
+        jobId,
+        totalShards: shardStats.total_shards || 0,
+        completedShards: shardStats.completed_shards || 0,
+        failedShards: shardStats.failed_shards || 0,
+        leadCount: leadStats.lead_count || 0,
+        timestamp: nowIso(),
+      });
+
+      return shardStats.unfinished_shards || 0;
+    },
+
+    finalizeJob(jobId, status, message, artifacts = {}) {
+      db.prepare(
+        `
+          UPDATE jobs
+          SET status = @status,
+              message = @message,
+              artifact_csv_path = COALESCE(@csvPath, artifact_csv_path),
+              artifact_json_path = COALESCE(@jsonPath, artifact_json_path),
+              finished_at = @timestamp,
+              updated_at = @timestamp
+          WHERE id = @jobId
+        `
+      ).run({
+        jobId,
+        status,
+        message,
+        csvPath: artifacts.csvPath || null,
+        jsonPath: artifacts.jsonPath || null,
+        timestamp: nowIso(),
+      });
+    },
+  };
+}
+
+function resetRunningShards(db) {
+  const timestamp = nowIso();
+
+  db.prepare(
+    `
+      UPDATE shards
+      SET status = 'retry',
+          next_run_at = @timestamp,
+          updated_at = @timestamp,
+          last_error = COALESCE(last_error, 'Recovered after process restart.')
+      WHERE status = 'running'
+    `
+  ).run({ timestamp });
+
+  db.prepare(
+    `
+      UPDATE jobs
+      SET status = CASE
+        WHEN status = 'running' THEN 'pending'
+        ELSE status
+      END,
+      message = CASE
+        WHEN status = 'running' THEN 'Recovered after process restart.'
+        ELSE message
+      END,
+      updated_at = @timestamp
+      WHERE status = 'running'
+    `
+  ).run({ timestamp });
+}
+
+function deserializeJobRow(row) {
+  return {
+    id: row.id,
+    country: row.country,
+    keyword: row.keyword,
+    selectors: JSON.parse(row.selectors_json),
+    status: row.status,
+    message: row.message,
+    countryName: row.country_name,
+    countryCode: row.country_code,
+    countryBBox: row.country_bbox_json ? JSON.parse(row.country_bbox_json) : null,
+    countryGeometry: row.country_geometry_json
+      ? JSON.parse(row.country_geometry_json)
+      : null,
+    totalShards: row.total_shards,
+    completedShards: row.completed_shards,
+    failedShards: row.failed_shards,
+    leadCount: row.lead_count,
+    artifactCsvPath: row.artifact_csv_path,
+    artifactJsonPath: row.artifact_json_path,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+  };
+}
+
+function deserializeShardRow(row) {
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    bbox: JSON.parse(row.bbox_json),
+    depth: row.depth,
+    status: row.status,
+    resultCount: row.result_count,
+    attemptCount: row.attempt_count,
+    nextRunAt: row.next_run_at,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function deserializeLeadRow(row) {
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    osmType: row.osm_type,
+    osmId: row.osm_id,
+    name: row.name,
+    category: row.category,
+    subcategory: row.subcategory,
+    website: row.website,
+    phone: row.phone,
+    email: row.email,
+    address: row.address,
+    lat: row.lat,
+    lon: row.lon,
+    sourceBBox: JSON.parse(row.source_bbox_json),
+    tags: JSON.parse(row.tags_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+module.exports = {
+  createStore,
+};

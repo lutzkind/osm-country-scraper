@@ -11,6 +11,7 @@ Autonomous country-scale OpenStreetMap scraper built for long-running public API
 - persists job, shard, and lead state in SQLite
 - retries and splits failed or overloaded shards
 - exports CSV and JSON artifacts when a job finishes
+- exposes a built-in operator dashboard for long-running country jobs
 
 ## Supported keywords
 
@@ -36,6 +37,12 @@ You can also send a custom `selectors` array:
 
 ## API
 
+### Operator dashboard
+
+Open the built-in dashboard in a browser:
+
+`http://localhost:3000/dashboard`
+
 ### Create job
 
 ```bash
@@ -48,6 +55,27 @@ curl -X POST http://localhost:3000/jobs \
 
 ```bash
 curl http://localhost:3000/jobs/<jobId>
+```
+
+This now includes derived monitoring stats such as shard state counts, recent lead growth, and throughput.
+
+### Get job stats
+
+```bash
+curl http://localhost:3000/jobs/<jobId>/stats
+```
+
+### List shards
+
+```bash
+curl 'http://localhost:3000/jobs/<jobId>/shards?limit=50&offset=0'
+curl 'http://localhost:3000/jobs/<jobId>/shards?status=retry&limit=50&offset=0'
+```
+
+### Recent shard errors
+
+```bash
+curl 'http://localhost:3000/jobs/<jobId>/errors?limit=25'
 ```
 
 ### List leads
@@ -116,3 +144,4 @@ docker run -p 3000:3000 -v $(pwd)/data:/app/data osm-country-scraper
 - This service is designed for **public API best-effort scraping**, not guaranteed throughput.
 - Country-scale public Overpass runs can take days or weeks.
 - Website values come from OSM tags such as `website` and `contact:website`.
+- Long-running progress is best interpreted through shard states rather than only job status. A country job can keep splitting into finer shards as dense areas are discovered.

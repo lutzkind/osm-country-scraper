@@ -205,6 +205,208 @@ function createStore(config) {
         .map(deserializeLeadRow);
     },
 
+    countJobShards(jobId, status = null) {
+      const row = status
+        ? db
+            .prepare(
+              `
+                SELECT COUNT(*) AS total
+                FROM shards
+                WHERE job_id = ?
+                  AND status = ?
+              `
+            )
+            .get(jobId, status)
+        : db
+            .prepare(
+              `
+                SELECT COUNT(*) AS total
+                FROM shards
+                WHERE job_id = ?
+              `
+            )
+            .get(jobId);
+
+      return row?.total || 0;
+    },
+
+    listJobShards(jobId, { status = null, limit = 100, offset = 0 } = {}) {
+      const rows = status
+        ? db
+            .prepare(
+              `
+                SELECT *
+                FROM shards
+                WHERE job_id = ?
+                  AND status = ?
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+                OFFSET ?
+              `
+            )
+            .all(jobId, status, limit, offset)
+        : db
+            .prepare(
+              `
+                SELECT *
+                FROM shards
+                WHERE job_id = ?
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+                OFFSET ?
+              `
+            )
+            .all(jobId, limit, offset);
+
+      return rows.map(deserializeShardRow);
+    },
+
+    getJobErrors(jobId, { limit = 25 } = {}) {
+      return db
+        .prepare(
+          `
+            SELECT *
+            FROM shards
+            WHERE job_id = ?
+              AND COALESCE(last_error, '') != ''
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ?
+          `
+        )
+        .all(jobId, limit)
+        .map(deserializeShardRow);
+    },
+
+    getJobStats(jobId) {
+      const job = this.getJob(jobId);
+      if (!job) {
+        return null;
+      }
+
+      const shardStats = db
+        .prepare(
+          `
+            SELECT
+              COUNT(*) AS total_shards,
+              SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_shards,
+              SUM(CASE WHEN status = 'retry' THEN 1 ELSE 0 END) AS retry_shards,
+              SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running_shards,
+              SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_shards,
+              SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_shards,
+              SUM(CASE WHEN status = 'split' THEN 1 ELSE 0 END) AS split_shards,
+              SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped_shards,
+              SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END) AS canceled_shards,
+              SUM(CASE WHEN status IN ('done', 'failed', 'split', 'skipped', 'canceled') THEN 1 ELSE 0 END) AS terminal_shards,
+              SUM(result_count) AS shard_result_count,
+              SUM(attempt_count) AS total_attempts,
+              MAX(depth) AS max_depth,
+              MIN(CASE WHEN status IN ('pending', 'retry') THEN next_run_at END) AS next_run_at,
+              MAX(updated_at) AS last_activity_at
+            FROM shards
+            WHERE job_id = ?
+          `
+        )
+        .get(jobId);
+
+      const websiteStats = db
+        .prepare(
+          `
+            SELECT
+              SUM(CASE WHEN COALESCE(website, '') != '' THEN 1 ELSE 0 END) AS leads_with_website,
+              SUM(CASE WHEN COALESCE(email, '') != '' THEN 1 ELSE 0 END) AS leads_with_email,
+              SUM(CASE WHEN COALESCE(phone, '') != '' THEN 1 ELSE 0 END) AS leads_with_phone
+            FROM leads
+            WHERE job_id = ?
+          `
+        )
+        .get(jobId);
+
+      const recentLeadStats = db
+        .prepare(
+          `
+            SELECT
+              SUM(CASE WHEN created_at >= @oneHourAgo THEN 1 ELSE 0 END) AS leads_last_hour,
+              SUM(CASE WHEN created_at >= @oneDayAgo THEN 1 ELSE 0 END) AS leads_last_day
+            FROM leads
+            WHERE job_id = @jobId
+          `
+        )
+        .get({
+          jobId,
+          oneHourAgo: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          oneDayAgo: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        });
+
+      const referenceStart = job.startedAt || job.createdAt;
+      const referenceEnd =
+        job.finishedAt && ["completed", "partial", "failed", "canceled"].includes(job.status)
+          ? job.finishedAt
+          : nowIso();
+      const elapsedMs = Math.max(
+        0,
+        new Date(referenceEnd).getTime() - new Date(referenceStart).getTime()
+      );
+      const elapsedHours = elapsedMs / (60 * 60 * 1000);
+      const safeElapsedHours = elapsedHours > 0 ? elapsedHours : null;
+
+      return {
+        statusCounts: {
+          pending: shardStats.pending_shards || 0,
+          retry: shardStats.retry_shards || 0,
+          running: shardStats.running_shards || 0,
+          done: shardStats.done_shards || 0,
+          failed: shardStats.failed_shards || 0,
+          split: shardStats.split_shards || 0,
+          skipped: shardStats.skipped_shards || 0,
+          canceled: shardStats.canceled_shards || 0,
+          terminal: shardStats.terminal_shards || 0,
+          total: shardStats.total_shards || 0,
+        },
+        leadCoverage: {
+          leadsWithWebsite: websiteStats.leads_with_website || 0,
+          leadsWithEmail: websiteStats.leads_with_email || 0,
+          leadsWithPhone: websiteStats.leads_with_phone || 0,
+        },
+        recentActivity: {
+          leadsLastHour: recentLeadStats.leads_last_hour || 0,
+          leadsLastDay: recentLeadStats.leads_last_day || 0,
+          nextRunAt: shardStats.next_run_at || null,
+          lastActivityAt: shardStats.last_activity_at || job.updatedAt,
+        },
+        throughput: {
+          leadsPerHour: safeElapsedHours
+            ? Number((job.leadCount / safeElapsedHours).toFixed(2))
+            : null,
+          completedShardsPerHour: safeElapsedHours
+            ? Number((job.completedShards / safeElapsedHours).toFixed(2))
+            : null,
+        },
+        progress: {
+          knownShardCompletionRatio:
+            (shardStats.total_shards || 0) > 0
+              ? Number(
+                  (
+                    ((shardStats.terminal_shards || 0) / shardStats.total_shards) *
+                    100
+                  ).toFixed(2)
+                )
+              : 0,
+        },
+        depth: {
+          maxDepth: shardStats.max_depth || 0,
+        },
+        attempts: {
+          totalAttempts: shardStats.total_attempts || 0,
+        },
+        elapsed: {
+          startedAt: referenceStart,
+          finishedAt: job.finishedAt,
+          elapsedMs,
+          elapsedHours: Number(elapsedHours.toFixed(2)),
+        },
+      };
+    },
+
     cancelJob(jobId) {
       const timestamp = nowIso();
       db.transaction(() => {

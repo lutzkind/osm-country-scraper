@@ -128,6 +128,7 @@
       .badge.completed { color: #052e16; background: var(--good); }
       .badge.partial, .badge.retry { color: #422006; background: var(--warn); }
       .badge.failed, .badge.canceled { color: #450a0a; background: var(--bad); }
+      .badge.paused { color: #2e1065; background: #c4b5fd; }
       .badge.pending { color: #111827; background: #cbd5e1; }
 
       .stats-grid {
@@ -310,6 +311,8 @@
               <div id="job-status"></div>
             </div>
             <div class="toolbar">
+              <button id="pause-job-button" class="secondary" type="button">Pause job</button>
+              <button id="resume-job-button" class="secondary" type="button">Resume job</button>
               <button id="cancel-job-button" class="secondary" type="button">Cancel job</button>
               <button id="delete-job-button" class="secondary" type="button">Delete job</button>
               <button id="sync-nocodb-button" class="secondary" type="button">Sync to NocoDB</button>
@@ -385,6 +388,7 @@
                     <th>Phone</th>
                     <th>Email</th>
                     <th>Category</th>
+                    <th>Subcategory</th>
                     <th>Coordinates</th>
                   </tr>
                 </thead>
@@ -429,6 +433,8 @@
         jobStatus: document.getElementById("job-status"),
         jobLinks: document.getElementById("job-links"),
         jobSyncStatus: document.getElementById("job-sync-status"),
+        pauseJobButton: document.getElementById("pause-job-button"),
+        resumeJobButton: document.getElementById("resume-job-button"),
         cancelJobButton: document.getElementById("cancel-job-button"),
         deleteJobButton: document.getElementById("delete-job-button"),
         syncNocoDbButton: document.getElementById("sync-nocodb-button"),
@@ -577,6 +583,7 @@
           ["Leads", formatNumber(job.leadCount)],
           ["Known shard completion", `${stats.progress.knownShardCompletionRatio}%`],
           ["Running shards", formatNumber(stats.statusCounts.running)],
+          ["Paused shards", formatNumber(stats.statusCounts.paused)],
           ["Pending/retry shards", formatNumber(stats.statusCounts.pending + stats.statusCounts.retry)],
           ["Failed shards", formatNumber(stats.statusCounts.failed)],
           ["Max split depth", formatNumber(stats.depth.maxDepth)],
@@ -618,6 +625,8 @@
           ? `NocoDB sync: ${sync.lastStatus || "idle"}${intervalLabel} · ${sync.lastMessage}`
           : `NocoDB sync: ${sync.lastStatus || "idle"}${intervalLabel}`;
         els.jobSyncStatus.textContent = syncMessage;
+        els.pauseJobButton.disabled = !["pending", "running"].includes(job.status);
+        els.resumeJobButton.disabled = job.status !== "paused";
         els.cancelJobButton.disabled = ["completed", "partial", "failed", "canceled"].includes(job.status);
         els.deleteJobButton.disabled = !["completed", "partial", "failed", "canceled"].includes(job.status);
         els.syncNocoDbButton.disabled = !syncStatus?.enabled;
@@ -661,7 +670,7 @@
 
       function renderLeads(payload) {
         if (!payload.leads.length) {
-          els.leadTableBody.innerHTML = `<tr><td colspan="6" class="empty">No leads yet.</td></tr>`;
+          els.leadTableBody.innerHTML = `<tr><td colspan="7" class="empty">No leads yet.</td></tr>`;
           return;
         }
 
@@ -671,7 +680,8 @@
             <td>${lead.website ? `<a href="${escapeHtml(lead.website)}" target="_blank" rel="noreferrer">${escapeHtml(lead.website)}</a>` : "-"}</td>
             <td>${escapeHtml(lead.phone || "-")}</td>
             <td>${escapeHtml(lead.email || "-")}</td>
-            <td>${escapeHtml(lead.category || "-")}${lead.subcategory ? ` / ${escapeHtml(lead.subcategory)}` : ""}</td>
+            <td>${escapeHtml(lead.category || "-")}</td>
+            <td>${escapeHtml(lead.subcategory || "-")}</td>
             <td>${escapeHtml(`${lead.lat}, ${lead.lon}`)}</td>
           </tr>
         `).join("");
@@ -822,6 +832,46 @@
             body: "{}",
           });
           setMessage(els.createJobMessage, "Job canceled.");
+          await fullRefresh();
+        } catch (error) {
+          setMessage(els.createJobMessage, error.message, true);
+        }
+      });
+
+      els.pauseJobButton.addEventListener("click", async () => {
+        if (!state.selectedJobId) {
+          return;
+        }
+
+        setMessage(els.createJobMessage, "Pausing job...");
+
+        try {
+          await requestJson(`/jobs/${state.selectedJobId}/pause`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
+          setMessage(els.createJobMessage, "Job paused.");
+          await fullRefresh();
+        } catch (error) {
+          setMessage(els.createJobMessage, error.message, true);
+        }
+      });
+
+      els.resumeJobButton.addEventListener("click", async () => {
+        if (!state.selectedJobId) {
+          return;
+        }
+
+        setMessage(els.createJobMessage, "Resuming job...");
+
+        try {
+          await requestJson(`/jobs/${state.selectedJobId}/resume`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
+          setMessage(els.createJobMessage, "Job resumed.");
           await fullRefresh();
         } catch (error) {
           setMessage(els.createJobMessage, error.message, true);

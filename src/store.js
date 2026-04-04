@@ -318,22 +318,24 @@ function createStore(config) {
           `
             SELECT
               COUNT(*) AS total_shards,
-              SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_shards,
-              SUM(CASE WHEN status = 'retry' THEN 1 ELSE 0 END) AS retry_shards,
-              SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running_shards,
-              SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_shards,
-              SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_shards,
-              SUM(CASE WHEN status = 'split' THEN 1 ELSE 0 END) AS split_shards,
-              SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped_shards,
-              SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END) AS canceled_shards,
-              SUM(CASE WHEN status IN ('done', 'failed', 'split', 'skipped', 'canceled') THEN 1 ELSE 0 END) AS terminal_shards,
-              SUM(result_count) AS shard_result_count,
-              SUM(attempt_count) AS total_attempts,
-              MAX(depth) AS max_depth,
-              MIN(CASE WHEN status IN ('pending', 'retry') THEN next_run_at END) AS next_run_at,
-              MAX(updated_at) AS last_activity_at
-            FROM shards
-            WHERE job_id = ?
+              SUM(CASE WHEN s.status = 'pending' THEN 1 ELSE 0 END) AS pending_shards,
+              SUM(CASE WHEN s.status = 'retry' THEN 1 ELSE 0 END) AS retry_shards,
+              SUM(CASE WHEN s.status = 'running' THEN 1 ELSE 0 END) AS running_shards,
+              SUM(CASE WHEN j.status = 'paused' AND s.status IN ('pending', 'retry') THEN 1 ELSE 0 END) AS paused_shards,
+              SUM(CASE WHEN s.status = 'done' THEN 1 ELSE 0 END) AS done_shards,
+              SUM(CASE WHEN s.status = 'failed' THEN 1 ELSE 0 END) AS failed_shards,
+              SUM(CASE WHEN s.status = 'split' THEN 1 ELSE 0 END) AS split_shards,
+              SUM(CASE WHEN s.status = 'skipped' THEN 1 ELSE 0 END) AS skipped_shards,
+              SUM(CASE WHEN s.status = 'canceled' THEN 1 ELSE 0 END) AS canceled_shards,
+              SUM(CASE WHEN s.status IN ('done', 'failed', 'split', 'skipped', 'canceled') THEN 1 ELSE 0 END) AS terminal_shards,
+              SUM(s.result_count) AS shard_result_count,
+              SUM(s.attempt_count) AS total_attempts,
+              MAX(s.depth) AS max_depth,
+              MIN(CASE WHEN s.status IN ('pending', 'retry') THEN s.next_run_at END) AS next_run_at,
+              MAX(s.updated_at) AS last_activity_at
+            FROM shards s
+            JOIN jobs j ON j.id = s.job_id
+            WHERE s.job_id = ?
           `
         )
         .get(jobId);
@@ -371,6 +373,8 @@ function createStore(config) {
       const referenceEnd =
         job.finishedAt && ["completed", "partial", "failed", "canceled"].includes(job.status)
           ? job.finishedAt
+          : job.status === "paused"
+            ? job.updatedAt
           : nowIso();
       const elapsedMs = Math.max(
         0,
@@ -384,6 +388,7 @@ function createStore(config) {
           pending: shardStats.pending_shards || 0,
           retry: shardStats.retry_shards || 0,
           running: shardStats.running_shards || 0,
+          paused: shardStats.paused_shards || 0,
           done: shardStats.done_shards || 0,
           failed: shardStats.failed_shards || 0,
           split: shardStats.split_shards || 0,
@@ -698,6 +703,48 @@ function createStore(config) {
       })();
 
       this.refreshJobStats(jobId);
+      return this.getJob(jobId);
+    },
+
+    pauseJob(jobId) {
+      db.prepare(
+        `
+          UPDATE jobs
+          SET status = 'paused',
+              message = 'Paused by operator.',
+              updated_at = @timestamp
+          WHERE id = @jobId
+        `
+      ).run({ jobId, timestamp: nowIso() });
+
+      return this.getJob(jobId);
+    },
+
+    resumeJob(jobId) {
+      const job = this.getJob(jobId);
+      if (!job) {
+        return null;
+      }
+
+      const resumedStatus =
+        job.totalShards > 0 || job.startedAt ? "running" : "pending";
+      const message = resumedStatus === "running" ? "Running" : "Queued";
+
+      db.prepare(
+        `
+          UPDATE jobs
+          SET status = @status,
+              message = @message,
+              updated_at = @timestamp
+          WHERE id = @jobId
+        `
+      ).run({
+        jobId,
+        status: resumedStatus,
+        message,
+        timestamp: nowIso(),
+      });
+
       return this.getJob(jobId);
     },
 

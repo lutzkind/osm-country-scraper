@@ -206,6 +206,50 @@ function createApp({ store, config, nocoDb }) {
     });
   });
 
+  app.post("/jobs/:jobId/pause", (req, res) => {
+    const job = store.getJob(req.params.jobId);
+    if (!job) {
+      return res.status(404).json({ error: "Job not found." });
+    }
+
+    if (job.status === "paused") {
+      return res.status(409).json({ error: "Job is already paused." });
+    }
+
+    if (["completed", "partial", "failed", "canceled"].includes(job.status)) {
+      return res.status(409).json({
+        error: `Job is already ${job.status}.`,
+      });
+    }
+
+    const pausedJob = store.pauseJob(job.id);
+    return res.json({
+      job: pausedJob,
+      stats: store.getJobStats(job.id),
+      links: buildLinks(req, config, job.id),
+    });
+  });
+
+  app.post("/jobs/:jobId/resume", (req, res) => {
+    const job = store.getJob(req.params.jobId);
+    if (!job) {
+      return res.status(404).json({ error: "Job not found." });
+    }
+
+    if (job.status !== "paused") {
+      return res.status(409).json({
+        error: "Only paused jobs can be resumed.",
+      });
+    }
+
+    const resumedJob = store.resumeJob(job.id);
+    return res.json({
+      job: resumedJob,
+      stats: store.getJobStats(job.id),
+      links: buildLinks(req, config, job.id),
+    });
+  });
+
   app.delete("/jobs/:jobId", (req, res, next) => {
     try {
       const job = store.getJob(req.params.jobId);
@@ -300,6 +344,8 @@ function buildLinks(req, config, jobId) {
     csv: `${baseUrl}/jobs/${jobId}/download?format=csv`,
     json: `${baseUrl}/jobs/${jobId}/download?format=json`,
     cancel: `${baseUrl}/jobs/${jobId}/cancel`,
+    pause: `${baseUrl}/jobs/${jobId}/pause`,
+    resume: `${baseUrl}/jobs/${jobId}/resume`,
     delete: `${baseUrl}/jobs/${jobId}`,
     nocodbSync: `${baseUrl}/jobs/${jobId}/sync/nocodb`,
   };

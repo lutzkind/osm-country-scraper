@@ -10,6 +10,7 @@ Autonomous country-scale OpenStreetMap scraper built for long-running public API
 - extracts POIs from **Overpass API**
 - persists job, shard, and lead state in SQLite
 - retries and splits failed or overloaded shards
+- lets operators pause and resume long-running jobs without losing state
 - exports CSV and JSON artifacts when a job finishes
 - exposes a built-in operator dashboard for long-running country jobs
 - can sync normalized lead output into NocoDB from the dashboard, automatically on job completion, or incrementally while jobs are still running
@@ -109,6 +110,15 @@ curl -b cookies.txt -X POST http://localhost:3000/jobs/<jobId>/cancel
 ```
 
 Canceling a job moves all pending, retrying, and currently claimed shards into `canceled` and prevents any in-flight shard from writing more results after the cancel request lands.
+
+### Pause or resume job
+
+```bash
+curl -b cookies.txt -X POST http://localhost:3000/jobs/<jobId>/pause
+curl -b cookies.txt -X POST http://localhost:3000/jobs/<jobId>/resume
+```
+
+Pausing stops the scheduler from claiming new shards for that job. Any shard that is already running is allowed to finish safely, and the remaining queued shards stay available for resume later.
 
 ### Delete job
 

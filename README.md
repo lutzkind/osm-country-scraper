@@ -6,7 +6,7 @@ Autonomous country-scale OpenStreetMap scraper built for long-running public API
 
 - accepts a `country + keyword`
 - resolves the country once with **Nominatim**
-- shards the country bounding box into resumable work units
+- shards the resolved country geometry into resumable work units instead of relying on one oversized root bbox
 - extracts POIs from **Overpass API**
 - persists job, shard, and lead state in SQLite
 - retries and splits failed or overloaded shards
@@ -167,6 +167,10 @@ If **auto-create columns** is enabled, the scraper will try to create any missin
 - `RETRY_BASE_DELAY_MS` exponential backoff base
 - `RESULT_SPLIT_THRESHOLD` split shards if a successful shard returns at least this many elements
 - `MIN_SHARD_WIDTH_DEG` and `MIN_SHARD_HEIGHT_DEG` guard against endless subdivision
+- `SEED_SHARD_MAX_AREA_DEG_SQ` geometry-aware seed shard target size for large countries
+- `SEED_SHARD_MAX_DEPTH` max recursive split depth while creating initial geometry-clipped seed shards
+- `PRE_QUERY_SPLIT_AREA_DEG_SQ` split oversized shards before the first Overpass query
+- `IMMEDIATE_SPLIT_DEPTH` shallow shard depth that should split immediately on 429/504 or timeout pressure
 - `ADMIN_USERNAME` dashboard admin username
 - `ADMIN_PASSWORD` dashboard admin password
 - `SESSION_COOKIE_NAME` cookie name for authenticated sessions
@@ -209,6 +213,7 @@ docker run -p 3000:3000 -v $(pwd)/data:/app/data osm-country-scraper
 
 - This service is designed for **public API best-effort scraping**, not guaranteed throughput.
 - Country-scale public Overpass runs can take days or weeks.
+- Large countries are now seeded from geometry-clipped initial shards so countries like the United States do not start from a world-spanning bbox.
 - Website values come from OSM tags such as `website` and `contact:website`.
 - Long-running progress is best interpreted through shard states rather than only job status. A country job can keep splitting into finer shards as dense areas are discovered.
 - The dashboard and job APIs are intentionally protected behind the same login so the UI cannot be bypassed by unauthenticated requests.

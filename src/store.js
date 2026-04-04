@@ -135,7 +135,7 @@ function createStore(config) {
       });
     },
 
-    seedJob(jobId, countryData) {
+    seedJob(jobId, countryData, initialShards = [countryData.bbox]) {
       const timestamp = nowIso();
       db.transaction(() => {
         db.prepare(
@@ -160,7 +160,7 @@ function createStore(config) {
           timestamp,
         });
 
-        db.prepare(
+        const insertShard = db.prepare(
           `
             INSERT INTO shards (
               job_id, bbox_json, depth, status, next_run_at,
@@ -169,11 +169,15 @@ function createStore(config) {
               @jobId, @bboxJson, 0, 'pending', @timestamp, @timestamp, @timestamp
             )
           `
-        ).run({
-          jobId,
-          bboxJson: JSON.stringify(countryData.bbox),
-          timestamp,
-        });
+        );
+
+        for (const bbox of initialShards) {
+          insertShard.run({
+            jobId,
+            bboxJson: JSON.stringify(bbox),
+            timestamp,
+          });
+        }
       })();
 
       this.refreshJobStats(jobId);

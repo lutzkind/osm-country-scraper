@@ -1,6 +1,8 @@
 const crypto = require("crypto");
 const {
+  bboxAreaDegrees,
   bboxIntersectsGeometry,
+  buildSeedBBoxes,
   splitBBox,
   canSplitBBox,
 } = require("./geo");
@@ -71,7 +73,13 @@ function createWorker({ store, config, nocoDb = null }) {
     for (const job of jobs) {
       try {
         const countryData = await resolveCountry(job.country, config);
-        store.seedJob(job.id, countryData);
+        const geometry = countryData.geometry || null;
+        const initialShards = buildSeedBBoxes(countryData.bbox, geometry, config);
+        store.seedJob(
+          job.id,
+          countryData,
+          initialShards.length > 0 ? initialShards : [countryData.bbox]
+        );
       } catch (error) {
         store.failJob(job.id, error.message);
       }
@@ -81,6 +89,16 @@ function createWorker({ store, config, nocoDb = null }) {
   async function processShard(job, shard, geometry) {
     if (geometry?.geometry && !bboxIntersectsGeometry(shard.bbox, geometry)) {
       store.skipShard(shard.id, "Shard does not intersect the country geometry.");
+      return;
+    }
+
+    const canSplit =
+      shard.depth < config.maxShardDepth && canSplitBBox(shard.bbox, config);
+    const isOversized =
+      bboxAreaDegrees(shard.bbox) > config.preQuerySplitAreaDegSq;
+
+    if (canSplit && isOversized) {
+      store.splitShard(shard.id, splitBBox(shard.bbox));
       return;
     }
 
@@ -113,14 +131,11 @@ function createWorker({ store, config, nocoDb = null }) {
         error.statusCode === 504 ||
         /timeout/i.test(error.message);
 
-      const canSplit =
-        shard.depth < config.maxShardDepth && canSplitBBox(shard.bbox, config);
-
       if (store.getJob(job.id)?.status === "canceled") {
         return;
       }
 
-      if (isRateOrTimeout && canSplit && shard.attemptCount >= 2) {
+      if (isRateOrTimeout && canSplit && shard.depth <= config.immediateSplitDepth) {
         store.splitShard(shard.id, splitBBox(shard.bbox));
         return;
       }

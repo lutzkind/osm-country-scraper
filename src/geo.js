@@ -28,6 +28,10 @@ function splitBBox(bbox) {
   ];
 }
 
+function bboxAreaDegrees(bbox) {
+  return Math.max(0, bbox.east - bbox.west) * Math.max(0, bbox.north - bbox.south);
+}
+
 function canSplitBBox(bbox, config) {
   return (
     bbox.east - bbox.west > config.minShardWidthDeg &&
@@ -51,11 +55,36 @@ function pointInsideGeometry(lat, lon, geometry) {
   return turf.booleanPointInPolygon(turf.point([lon, lat]), geometry);
 }
 
+function buildSeedBBoxes(bbox, geometry, config, depth = 0) {
+  if (!geometry) {
+    return [bbox];
+  }
+
+  if (!bboxIntersectsGeometry(bbox, geometry)) {
+    return [];
+  }
+
+  const shouldSplit =
+    depth < config.seedShardMaxDepth &&
+    canSplitBBox(bbox, config) &&
+    bboxAreaDegrees(bbox) > config.seedShardMaxAreaDegSq;
+
+  if (!shouldSplit) {
+    return [bbox];
+  }
+
+  return splitBBox(bbox).flatMap((child) =>
+    buildSeedBBoxes(child, geometry, config, depth + 1)
+  );
+}
+
 module.exports = {
   parseBoundingBox,
   bboxToArray,
+  bboxAreaDegrees,
   splitBBox,
   canSplitBBox,
   bboxIntersectsGeometry,
   pointInsideGeometry,
+  buildSeedBBoxes,
 };

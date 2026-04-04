@@ -402,6 +402,7 @@
         jobs: [],
         refreshTimer: null,
         nocodbConfig: null,
+        nocodbDirty: false,
       };
 
       const els = {
@@ -528,9 +529,16 @@
         renderJobs();
       }
 
-      async function loadNocoDbConfig() {
+      function setNocoDbDirty(isDirty) {
+        state.nocodbDirty = Boolean(isDirty);
+      }
+
+      async function loadNocoDbConfig(options = {}) {
         const payload = await requestJson("/integrations/nocodb");
         state.nocodbConfig = payload;
+        if (state.nocodbDirty && !options.force) {
+          return;
+        }
         els.nocodbBaseUrl.value = payload.baseUrl || "";
         els.nocodbApiToken.value = "";
         els.nocodbApiToken.placeholder = payload.hasApiToken
@@ -541,6 +549,7 @@
         els.nocodbAutoSyncInterval.value = String(payload.autoSyncIntervalMinutes || 0);
         els.nocodbAutoSync.checked = Boolean(payload.autoSyncOnCompletion);
         els.nocodbAutoCreateColumns.checked = payload.autoCreateColumns !== false;
+        setNocoDbDirty(false);
       }
 
       function nocodbPayloadFromForm(includeToken) {
@@ -747,7 +756,7 @@
           });
 
           state.nocodbConfig = payload;
-          await loadNocoDbConfig();
+          await loadNocoDbConfig({ force: true });
           setMessage(els.nocodbMessage, "NocoDB settings saved.");
           await refreshSelectedJob();
         } catch (error) {
@@ -773,6 +782,13 @@
           setMessage(els.nocodbMessage, error.message, true);
         }
       });
+
+      for (const field of els.nocodbForm.querySelectorAll("input")) {
+        const eventName = field.type === "checkbox" ? "change" : "input";
+        field.addEventListener(eventName, () => {
+          setNocoDbDirty(true);
+        });
+      }
 
       els.refreshJobs.addEventListener("click", () => {
         fullRefresh().catch((error) => {

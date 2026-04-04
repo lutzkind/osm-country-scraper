@@ -1175,6 +1175,8 @@ function deserializeShardRow(row) {
 }
 
 function deserializeLeadRow(row) {
+  const tags = JSON.parse(row.tags_json);
+  const allSubcategories = extractOsmSubcategories(tags);
   return {
     id: row.id,
     jobId: row.job_id,
@@ -1182,7 +1184,8 @@ function deserializeLeadRow(row) {
     osmId: row.osm_id,
     name: row.name,
     category: row.category,
-    subcategory: row.subcategory,
+    subcategory: row.subcategory || allSubcategories[0] || "",
+    allSubcategories,
     website: row.website,
     phone: row.phone,
     email: row.email,
@@ -1190,10 +1193,22 @@ function deserializeLeadRow(row) {
     lat: row.lat,
     lon: row.lon,
     sourceBBox: JSON.parse(row.source_bbox_json),
-    tags: JSON.parse(row.tags_json),
+    tags,
+    source: "OSM",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function extractOsmSubcategories(tags) {
+  const values = [
+    tags?.cuisine,
+    tags?.["tourism:type"],
+    tags?.brand,
+    tags?.operator,
+  ];
+
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
 }
 
 function defaultSyncState(jobId) {

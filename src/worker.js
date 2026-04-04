@@ -66,12 +66,15 @@ function createWorker({ store, config, nocoDb = null }) {
   };
 
   async function bootstrapPendingJobs() {
-    const jobs = store
-      .listJobs()
-      .filter((job) => job.status === "pending" && job.totalShards === 0);
+    const jobs = store.listJobs().filter((job) => job.status === "pending");
 
     for (const job of jobs) {
       try {
+        if (job.totalShards > 0 || job.startedAt) {
+          store.resumeJob(job.id);
+          continue;
+        }
+
         const countryData = await resolveCountry(job.country, config);
         const geometry = countryData.geometry || null;
         const initialShards = buildSeedBBoxes(countryData.bbox, geometry, config);

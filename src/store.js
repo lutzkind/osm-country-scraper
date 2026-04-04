@@ -68,6 +68,11 @@ function createStore(config) {
       phone TEXT,
       email TEXT,
       address TEXT,
+      city TEXT,
+      area TEXT,
+      state_region TEXT,
+      postcode TEXT,
+      country TEXT,
       lat REAL NOT NULL,
       lon REAL NOT NULL,
       source_bbox_json TEXT NOT NULL,
@@ -107,6 +112,14 @@ function createStore(config) {
       FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
     );
   `);
+
+  ensureLeadColumns(db, "leads", [
+    ["city", "TEXT"],
+    ["area", "TEXT"],
+    ["state_region", "TEXT"],
+    ["postcode", "TEXT"],
+    ["country", "TEXT"],
+  ]);
 
   resetRunningShards(db);
   cleanupExpiredSessions(db);
@@ -926,12 +939,12 @@ function createStore(config) {
           `
             INSERT INTO leads (
               job_id, osm_type, osm_id, name, category, subcategory, website,
-              phone, email, address, lat, lon, source_bbox_json, tags_json,
-              created_at, updated_at
+              phone, email, address, city, area, state_region, postcode, country,
+              lat, lon, source_bbox_json, tags_json, created_at, updated_at
             ) VALUES (
               @jobId, @osmType, @osmId, @name, @category, @subcategory, @website,
-              @phone, @email, @address, @lat, @lon, @sourceBBoxJson, @tagsJson,
-              @timestamp, @timestamp
+              @phone, @email, @address, @city, @area, @stateRegion, @postcode,
+              @country, @lat, @lon, @sourceBBoxJson, @tagsJson, @timestamp, @timestamp
             )
             ON CONFLICT(job_id, osm_type, osm_id) DO UPDATE SET
               name = excluded.name,
@@ -953,6 +966,26 @@ function createStore(config) {
                 WHEN COALESCE(leads.address, '') = '' THEN excluded.address
                 ELSE leads.address
               END,
+              city = CASE
+                WHEN COALESCE(leads.city, '') = '' THEN excluded.city
+                ELSE leads.city
+              END,
+              area = CASE
+                WHEN COALESCE(leads.area, '') = '' THEN excluded.area
+                ELSE leads.area
+              END,
+              state_region = CASE
+                WHEN COALESCE(leads.state_region, '') = '' THEN excluded.state_region
+                ELSE leads.state_region
+              END,
+              postcode = CASE
+                WHEN COALESCE(leads.postcode, '') = '' THEN excluded.postcode
+                ELSE leads.postcode
+              END,
+              country = CASE
+                WHEN COALESCE(leads.country, '') = '' THEN excluded.country
+                ELSE leads.country
+              END,
               tags_json = excluded.tags_json,
               updated_at = excluded.updated_at
           `
@@ -970,6 +1003,11 @@ function createStore(config) {
             phone: lead.phone,
             email: lead.email,
             address: lead.address,
+            city: lead.city,
+            area: lead.area,
+            stateRegion: lead.stateRegion,
+            postcode: lead.postcode,
+            country: lead.country,
             lat: lead.lat,
             lon: lead.lon,
             sourceBBoxJson: JSON.stringify(lead.bbox),
@@ -1146,6 +1184,21 @@ function cleanupExpiredSessions(db) {
   ).run({ timestamp: nowIso() });
 }
 
+function ensureLeadColumns(db, tableName, columns) {
+  const existing = new Set(
+    db
+      .prepare(`PRAGMA table_info(${tableName})`)
+      .all()
+      .map((column) => column.name)
+  );
+
+  for (const [name, type] of columns) {
+    if (!existing.has(name)) {
+      db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${name} ${type}`);
+    }
+  }
+}
+
 function deserializeJobRow(row) {
   return {
     id: row.id,
@@ -1205,6 +1258,11 @@ function deserializeLeadRow(row) {
     phone: row.phone,
     email: row.email,
     address: row.address,
+    city: row.city,
+    area: row.area,
+    stateRegion: row.state_region,
+    postcode: row.postcode,
+    country: row.country,
     lat: row.lat,
     lon: row.lon,
     sourceBBox: JSON.parse(row.source_bbox_json),

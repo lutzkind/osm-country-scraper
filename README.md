@@ -143,11 +143,12 @@ The sync writes a normalized lead schema into the chosen table, including:
 - `job_id`, `country`, `country_name`, `country_code`, `keyword`, `job_status`
 - `osm_type`, `osm_id`, `osm_url`
 - `name`, `category`, `subcategory`, `website`, `phone`, `email`, `address`
+- `city`, `area`, `state_region`, `postcode`, `lead_country`
 - `lat`, `lon`
 - `raw_tags_json`, `source_bbox_json`
 - `scraped_at`, `lead_created_at`, `lead_updated_at`
 
-If **auto-create columns** is enabled, the scraper will try to create any missing columns in the target table before syncing. Website, phone, email, address, category, and location fields are always part of the default synced schema.
+If **auto-create columns** is enabled, the scraper will try to create any missing columns in the target table before syncing. Website, phone, email, address, city/area/state/postcode fields, category, and location fields are always part of the default synced schema.
 
 ## Environment
 

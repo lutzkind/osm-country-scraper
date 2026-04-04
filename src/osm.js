@@ -166,15 +166,56 @@ function buildAddress(tags) {
     return tags["addr:full"];
   }
 
+  const location = extractLocationFields(tags);
   const parts = [
     [tags["addr:housenumber"], tags["addr:street"]].filter(Boolean).join(" "),
-    tags["addr:city"],
-    tags["addr:state"],
-    tags["addr:postcode"],
-    tags["addr:country"],
+    location.area,
+    location.city,
+    location.stateRegion,
+    location.postcode,
+    location.country,
   ].filter(Boolean);
 
   return parts.join(", ");
+}
+
+function extractLocationFields(tags) {
+  return {
+    city: pickTagValue(tags, [
+      "addr:city",
+      "addr:town",
+      "addr:village",
+      "addr:municipality",
+      "addr:hamlet",
+    ]),
+    area: pickTagValue(tags, [
+      "addr:suburb",
+      "addr:district",
+      "addr:city_district",
+      "addr:neighbourhood",
+      "addr:neighborhood",
+      "addr:quarter",
+      "addr:county",
+    ]),
+    stateRegion: pickTagValue(tags, [
+      "addr:state",
+      "addr:province",
+      "addr:region",
+      "addr:state_district",
+    ]),
+    postcode: pickTagValue(tags, ["addr:postcode"]),
+    country: pickTagValue(tags, ["addr:country", "is_in:country"]),
+  };
+}
+
+function pickTagValue(tags, keys) {
+  for (const key of keys) {
+    const value = String(tags[key] || "").trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
 }
 
 function mapElementToLead(element, geometry, bbox) {
@@ -189,6 +230,8 @@ function mapElementToLead(element, geometry, bbox) {
   if (!pointInsideGeometry(lat, lon, geometry)) {
     return null;
   }
+
+  const location = extractLocationFields(tags);
 
   return {
     osmType: element.type,
@@ -214,6 +257,11 @@ function mapElementToLead(element, geometry, bbox) {
     phone: normalizePhone(tags.phone || tags["contact:phone"]),
     email: normalizeEmail(tags.email || tags["contact:email"]),
     address: buildAddress(tags),
+    city: location.city,
+    area: location.area,
+    stateRegion: location.stateRegion,
+    postcode: location.postcode,
+    country: location.country,
     lat,
     lon,
     bbox,

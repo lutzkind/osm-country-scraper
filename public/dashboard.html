@@ -277,7 +277,7 @@
             <input id="nocodb-auto-sync-interval" name="autoSyncIntervalMinutes" type="number" min="0" step="1" placeholder="Auto-sync interval while jobs run (minutes, recommended 30; 0 disables)">
             <label class="inline-option"><input id="nocodb-auto-sync" type="checkbox"> Auto-sync completed jobs</label>
             <label class="inline-option"><input id="nocodb-auto-create-columns" type="checkbox"> Auto-create missing NocoDB columns</label>
-            <div class="subtle">The sync stores query/source fields plus normalized lead fields and <code>raw_tags_json</code>. Website, phone, email, address, category, subcategory, and all subcategories are synced by default. For long-running country jobs, a 30-minute interval is the recommended rolling output setting.</div>
+            <div class="subtle">The sync stores query/source fields plus normalized lead fields and <code>raw_tags_json</code>. Website, phone, email, address, city, area, state/postcode, category, subcategory, and all subcategories are synced by default. For long-running country jobs, a 30-minute interval is the recommended rolling output setting.</div>
             <div class="toolbar">
               <button type="submit">Save NocoDB settings</button>
               <button id="nocodb-test-button" class="secondary" type="button">Test connection</button>

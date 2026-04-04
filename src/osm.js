@@ -270,6 +270,7 @@ function mapElementToLead(element, geometry, bbox) {
 }
 
 module.exports = {
+  extractLocationFields,
   resolveCountry,
   queryOverpass,
   normalizeWebsite,

@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const Database = require("better-sqlite3");
+const { extractLocationFields } = require("./osm");
 
 function nowIso() {
   return new Date().toISOString();
@@ -120,6 +121,7 @@ function createStore(config) {
     ["postcode", "TEXT"],
     ["country", "TEXT"],
   ]);
+  backfillLeadLocations(db);
 
   resetRunningShards(db);
   cleanupExpiredSessions(db);
@@ -1196,6 +1198,61 @@ function ensureLeadColumns(db, tableName, columns) {
     if (!existing.has(name)) {
       db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${name} ${type}`);
     }
+  }
+}
+
+function backfillLeadLocations(db) {
+  const rows = db
+    .prepare(
+      `
+        SELECT id, tags_json, city, area, state_region, postcode, country
+        FROM leads
+        WHERE COALESCE(city, '') = ''
+           OR COALESCE(area, '') = ''
+           OR COALESCE(state_region, '') = ''
+           OR COALESCE(postcode, '') = ''
+           OR COALESCE(country, '') = ''
+      `
+    )
+    .all();
+
+  if (!rows.length) {
+    return;
+  }
+
+  const update = db.prepare(
+    `
+      UPDATE leads
+      SET city = CASE WHEN COALESCE(city, '') = '' THEN @city ELSE city END,
+          area = CASE WHEN COALESCE(area, '') = '' THEN @area ELSE area END,
+          state_region = CASE WHEN COALESCE(state_region, '') = '' THEN @stateRegion ELSE state_region END,
+          postcode = CASE WHEN COALESCE(postcode, '') = '' THEN @postcode ELSE postcode END,
+          country = CASE WHEN COALESCE(country, '') = '' THEN @country ELSE country END
+      WHERE id = @id
+    `
+  );
+
+  db.transaction(() => {
+    for (const row of rows) {
+      const tags = safeJsonParse(row.tags_json) || {};
+      const location = extractLocationFields(tags);
+      update.run({
+        id: row.id,
+        city: location.city,
+        area: location.area,
+        stateRegion: location.stateRegion,
+        postcode: location.postcode,
+        country: location.country,
+      });
+    }
+  })();
+}
+
+function safeJsonParse(value) {
+  try {
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
   }
 }
 

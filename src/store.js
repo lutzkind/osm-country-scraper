@@ -801,6 +801,21 @@ function createStore(config) {
         .map(deserializeLeadRow);
     },
 
+    countJobLeadsAfterId(jobId, leadId = 0) {
+      const row = db
+        .prepare(
+          `
+            SELECT COUNT(*) AS total
+            FROM leads
+            WHERE job_id = ?
+              AND id > ?
+          `
+        )
+        .get(jobId, leadId);
+
+      return row?.total || 0;
+    },
+
     claimNextShard() {
       const timestamp = nowIso();
       const row = db

@@ -180,7 +180,7 @@ If **auto-create columns** is enabled, the scraper will try to create any missin
 - `NOCODB_BASE_ID` default NocoDB base/project ID
 - `NOCODB_TABLE_ID` default NocoDB table ID for synced leads
 - `NOCODB_AUTO_SYNC_ON_COMPLETION` automatically sync completed jobs to NocoDB
-- `NOCODB_AUTO_SYNC_INTERVAL_MINUTES` sync new leads to NocoDB every N minutes while a job is running (`0` disables)
+- `NOCODB_AUTO_SYNC_INTERVAL_MINUTES` sync new leads to NocoDB every N minutes while a job is running (default `30`, `0` disables)
 - `NOCODB_AUTO_CREATE_COLUMNS` create missing target columns before syncing
 
 ## Run locally

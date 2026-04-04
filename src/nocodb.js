@@ -51,10 +51,13 @@ function createNocoDbService({ store, config }) {
     },
 
     getJobSyncStatus(jobId) {
+      const settings = store.getNocoDbConfig();
+      const sync = store.getNocoDbSyncState(jobId);
       return {
-        enabled: hasEnoughSettings(store.getNocoDbConfig()),
-        config: toPublicConfig(store.getNocoDbConfig()),
-        sync: store.getNocoDbSyncState(jobId),
+        enabled: hasEnoughSettings(settings),
+        config: toPublicConfig(settings),
+        sync,
+        telemetry: buildSyncTelemetry(store, settings, jobId, sync),
       };
     },
 
@@ -160,7 +163,6 @@ function createNocoDbService({ store, config }) {
         return [];
       }
 
-      const intervalMs = intervalMinutes * 60 * 1000;
       const now = Date.now();
 
       return store
@@ -172,23 +174,25 @@ function createNocoDbService({ store, config }) {
         }))
         .filter(({ syncState }) => syncState.lastStatus !== "running")
         .filter(({ job, syncState }) => {
-          const hasUnsyncedLead =
-            store.getJobLeadsAfterId(job.id, syncState.lastSyncedLeadId || 0, {
-              limit: 1,
-            }).length > 0;
-
-          if (!hasUnsyncedLead) {
+          const unsyncedLeadCount = store.countJobLeadsAfterId(
+            job.id,
+            syncState.lastSyncedLeadId || 0
+          );
+          if (!unsyncedLeadCount) {
             return false;
           }
 
-          const lastActivityAt =
-            syncState.lastFinishedAt || syncState.lastStartedAt || null;
-
-          if (!lastActivityAt) {
+          const dueAt = getNextIncrementalSyncAt(
+            job,
+            syncState,
+            settings,
+            unsyncedLeadCount
+          );
+          if (!dueAt) {
             return true;
           }
 
-          return now - Date.parse(lastActivityAt) >= intervalMs;
+          return now - Date.parse(dueAt) >= 0;
         })
         .map(({ job }) => job.id);
     },
@@ -260,6 +264,46 @@ function toPublicConfig(settings) {
     autoCreateColumns: settings.autoCreateColumns !== false,
     hasApiToken: Boolean(settings.apiToken),
   };
+}
+
+function buildSyncTelemetry(store, settings, jobId, sync = null) {
+  const syncState = sync || store.getNocoDbSyncState(jobId);
+  const job = store.getJob(jobId);
+  const unsyncedLeadCount = store.countJobLeadsAfterId(
+    jobId,
+    syncState.lastSyncedLeadId || 0
+  );
+
+  return {
+    unsyncedLeadCount,
+    nextDueAt: getNextIncrementalSyncAt(job, syncState, settings, unsyncedLeadCount),
+  };
+}
+
+function getNextIncrementalSyncAt(job, syncState, settings, unsyncedLeadCount = null) {
+  if (!job || !["queued", "running"].includes(job.status)) {
+    return null;
+  }
+
+  const intervalMinutes = Number(settings.autoSyncIntervalMinutes || 0);
+  if (!intervalMinutes || syncState.lastStatus === "running") {
+    return null;
+  }
+
+  const pendingCount =
+    unsyncedLeadCount == null ? 0 : Number.parseInt(String(unsyncedLeadCount), 10);
+  if (Number.isFinite(pendingCount) && pendingCount <= 0) {
+    return null;
+  }
+
+  const referenceTime =
+    syncState.lastFinishedAt || syncState.lastStartedAt || job.startedAt || job.updatedAt;
+  if (!referenceTime) {
+    return new Date().toISOString();
+  }
+
+  const dueAt = new Date(referenceTime).getTime() + intervalMinutes * 60_000;
+  return Number.isNaN(dueAt) ? new Date().toISOString() : new Date(dueAt).toISOString();
 }
 
 function buildDesiredFields() {

@@ -90,7 +90,7 @@ module.exports = {
     baseId: process.env.NOCODB_BASE_ID || null,
     tableId: process.env.NOCODB_TABLE_ID || null,
     autoSyncOnCompletion: boolFromEnv("NOCODB_AUTO_SYNC_ON_COMPLETION", false),
-    autoSyncIntervalMinutes: intFromEnv("NOCODB_AUTO_SYNC_INTERVAL_MINUTES", 0),
+    autoSyncIntervalMinutes: intFromEnv("NOCODB_AUTO_SYNC_INTERVAL_MINUTES", 30),
     autoCreateColumns: boolFromEnv("NOCODB_AUTO_CREATE_COLUMNS", true),
   },
 };

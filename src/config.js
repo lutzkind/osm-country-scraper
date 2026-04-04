@@ -88,6 +88,5 @@ module.exports = {
     autoSyncOnCompletion: boolFromEnv("NOCODB_AUTO_SYNC_ON_COMPLETION", false),
     autoSyncIntervalMinutes: intFromEnv("NOCODB_AUTO_SYNC_INTERVAL_MINUTES", 0),
     autoCreateColumns: boolFromEnv("NOCODB_AUTO_CREATE_COLUMNS", true),
-    promotedTags: arrayFromEnv("NOCODB_PROMOTED_TAGS", []),
   },
 };

@@ -567,10 +567,6 @@ function createStore(config) {
           "nocodb.autoCreateColumns",
           config.nocoDb.autoCreateColumns
         ),
-        promotedTags: this.getAppSetting(
-          "nocodb.promotedTags",
-          config.nocoDb.promotedTags
-        ),
       });
     },
 
@@ -593,7 +589,6 @@ function createStore(config) {
         "nocodb.autoSyncOnCompletion": next.autoSyncOnCompletion,
         "nocodb.autoSyncIntervalMinutes": next.autoSyncIntervalMinutes,
         "nocodb.autoCreateColumns": next.autoCreateColumns,
-        "nocodb.promotedTags": next.promotedTags,
       });
 
       return next;
@@ -1194,7 +1189,6 @@ function sanitizeNocoDbConfig(input) {
         : 0,
     autoCreateColumns:
       input.autoCreateColumns == null ? true : Boolean(input.autoCreateColumns),
-    promotedTags: normalizeStringArray(input.promotedTags),
   };
 }
 

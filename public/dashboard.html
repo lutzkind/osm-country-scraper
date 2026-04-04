@@ -273,11 +273,10 @@
             <input id="nocodb-api-token" name="apiToken" type="password" placeholder="API token (leave blank to keep saved token)">
             <input id="nocodb-base-id" name="baseId" placeholder="Base ID">
             <input id="nocodb-table-id" name="tableId" placeholder="Table ID for synced leads">
-            <input id="nocodb-promoted-tags" name="promotedTags" placeholder="Promoted OSM tags, comma-separated">
             <input id="nocodb-auto-sync-interval" name="autoSyncIntervalMinutes" type="number" min="0" step="1" placeholder="Auto-sync interval while jobs run (minutes, 0 disables)">
             <label class="inline-option"><input id="nocodb-auto-sync" type="checkbox"> Auto-sync completed jobs</label>
             <label class="inline-option"><input id="nocodb-auto-create-columns" type="checkbox"> Auto-create missing NocoDB columns</label>
-            <div class="subtle">The sync stores normalized lead fields plus <code>raw_tags_json</code>. Promoted tags become extra columns such as <code>osm_contact_website</code>. Set the interval to push new leads into NocoDB while a job is still running.</div>
+            <div class="subtle">The sync stores normalized lead fields plus <code>raw_tags_json</code>. Website, phone, email, address, and core location fields are synced by default. Set the interval to push new leads into NocoDB while a job is still running.</div>
             <div class="toolbar">
               <button type="submit">Save NocoDB settings</button>
               <button id="nocodb-test-button" class="secondary" type="button">Test connection</button>
@@ -415,7 +414,6 @@
         nocodbApiToken: document.getElementById("nocodb-api-token"),
         nocodbBaseId: document.getElementById("nocodb-base-id"),
         nocodbTableId: document.getElementById("nocodb-table-id"),
-        nocodbPromotedTags: document.getElementById("nocodb-promoted-tags"),
         nocodbAutoSyncInterval: document.getElementById("nocodb-auto-sync-interval"),
         nocodbAutoSync: document.getElementById("nocodb-auto-sync"),
         nocodbAutoCreateColumns: document.getElementById("nocodb-auto-create-columns"),
@@ -540,7 +538,6 @@
           : "API token";
         els.nocodbBaseId.value = payload.baseId || "";
         els.nocodbTableId.value = payload.tableId || "";
-        els.nocodbPromotedTags.value = (payload.promotedTags || []).join(", ");
         els.nocodbAutoSyncInterval.value = String(payload.autoSyncIntervalMinutes || 0);
         els.nocodbAutoSync.checked = Boolean(payload.autoSyncOnCompletion);
         els.nocodbAutoCreateColumns.checked = payload.autoCreateColumns !== false;
@@ -551,10 +548,6 @@
           baseUrl: els.nocodbBaseUrl.value.trim(),
           baseId: els.nocodbBaseId.value.trim(),
           tableId: els.nocodbTableId.value.trim(),
-          promotedTags: els.nocodbPromotedTags.value
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean),
           autoSyncIntervalMinutes: Number.parseInt(
             els.nocodbAutoSyncInterval.value || "0",
             10

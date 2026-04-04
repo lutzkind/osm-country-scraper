@@ -126,7 +126,6 @@ The dashboard includes an **NocoDB integration** panel where you can:
 - test the connection before syncing
 - enable automatic sync when jobs finish
 - set an incremental sync interval in minutes for running jobs (`0` disables in-progress sync)
-- choose comma-separated promoted OSM tag keys that become extra NocoDB columns
 - manually sync any selected job into NocoDB
 
 The sync writes a normalized lead schema into the chosen table, including:
@@ -138,7 +137,7 @@ The sync writes a normalized lead schema into the chosen table, including:
 - `raw_tags_json`, `source_bbox_json`
 - `scraped_at`, `lead_created_at`, `lead_updated_at`
 
-If **auto-create columns** is enabled, the scraper will try to create any missing columns in the target table before syncing.
+If **auto-create columns** is enabled, the scraper will try to create any missing columns in the target table before syncing. Website, phone, email, address, category, and location fields are always part of the default synced schema.
 
 ## Environment
 
@@ -169,7 +168,6 @@ If **auto-create columns** is enabled, the scraper will try to create any missin
 - `NOCODB_AUTO_SYNC_ON_COMPLETION` automatically sync completed jobs to NocoDB
 - `NOCODB_AUTO_SYNC_INTERVAL_MINUTES` sync new leads to NocoDB every N minutes while a job is running (`0` disables)
 - `NOCODB_AUTO_CREATE_COLUMNS` create missing target columns before syncing
-- `NOCODB_PROMOTED_TAGS` comma-separated OSM tag keys to promote to first-class NocoDB columns
 
 ## Run locally
 

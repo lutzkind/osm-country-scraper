@@ -161,16 +161,16 @@ If **auto-create columns** is enabled, the scraper will try to create any missin
 - `WORKER_POLL_MS` worker loop interval
 - `OVERPASS_DELAY_MS` delay between Overpass requests
 - `OVERPASS_TIMEOUT_MS` HTTP timeout
-- `OVERPASS_QUERY_TIMEOUT_SEC` query timeout passed to Overpass
+- `OVERPASS_QUERY_TIMEOUT_SEC` query timeout passed to Overpass (default `75`)
 - `MAX_SHARD_DEPTH` max bbox subdivision depth
 - `RETRY_LIMIT` retry attempts before final failure or forced split
 - `RETRY_BASE_DELAY_MS` exponential backoff base
 - `RESULT_SPLIT_THRESHOLD` split shards if a successful shard returns at least this many elements
-- `MIN_SHARD_WIDTH_DEG` and `MIN_SHARD_HEIGHT_DEG` guard against endless subdivision
+- `MIN_SHARD_WIDTH_DEG` and `MIN_SHARD_HEIGHT_DEG` guard against endless subdivision (default `0.05`)
 - `SEED_SHARD_MAX_AREA_DEG_SQ` geometry-aware seed shard target size for large countries
 - `SEED_SHARD_MAX_DEPTH` max recursive split depth while creating initial geometry-clipped seed shards
-- `PRE_QUERY_SPLIT_AREA_DEG_SQ` split oversized shards before the first Overpass query
-- `IMMEDIATE_SPLIT_DEPTH` shallow shard depth that should split immediately on 429/504 or timeout pressure
+- `PRE_QUERY_SPLIT_AREA_DEG_SQ` split oversized shards before the first Overpass query (default `10`)
+- `IMMEDIATE_SPLIT_DEPTH` shallow shard depth that should split immediately on 429/504 or timeout pressure (default `4`)
 - `ADMIN_USERNAME` dashboard admin username
 - `ADMIN_PASSWORD` dashboard admin password
 - `SESSION_COOKIE_NAME` cookie name for authenticated sessions

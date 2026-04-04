@@ -138,7 +138,11 @@ function createWorker({ store, config, nocoDb = null }) {
         return;
       }
 
-      if (isRateOrTimeout && canSplit && shard.depth <= config.immediateSplitDepth) {
+      if (
+        isRateOrTimeout &&
+        canSplit &&
+        (shard.depth <= config.immediateSplitDepth || shard.attemptCount >= 2)
+      ) {
         store.splitShard(shard.id, splitBBox(shard.bbox));
         return;
       }

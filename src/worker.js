@@ -15,6 +15,7 @@ function createWorker({ store, config, nocoDb = null }) {
 
   return {
     async start() {
+      recoverStaleRunningShards();
       await bootstrapPendingJobs();
       timer = setInterval(() => {
         this.tick().catch((error) => {
@@ -37,6 +38,7 @@ function createWorker({ store, config, nocoDb = null }) {
 
       busy = true;
       try {
+        recoverStaleRunningShards();
         await bootstrapPendingJobs();
         const shard = store.claimNextShard();
         if (!shard) {
@@ -91,7 +93,11 @@ function createWorker({ store, config, nocoDb = null }) {
 
   async function processShard(job, shard, geometry) {
     if (geometry?.geometry && !bboxIntersectsGeometry(shard.bbox, geometry)) {
-      store.skipShard(shard.id, "Shard does not intersect the country geometry.");
+      store.skipShard(
+        shard.id,
+        "Shard does not intersect the country geometry.",
+        shard.runToken
+      );
       return;
     }
 
@@ -101,7 +107,7 @@ function createWorker({ store, config, nocoDb = null }) {
       bboxAreaDegrees(shard.bbox) > config.preQuerySplitAreaDegSq;
 
     if (canSplit && isOversized) {
-      store.splitShard(shard.id, splitBBox(shard.bbox));
+      store.splitShard(shard.id, splitBBox(shard.bbox), shard.runToken);
       return;
     }
 
@@ -122,11 +128,11 @@ function createWorker({ store, config, nocoDb = null }) {
         shard.depth < config.maxShardDepth &&
         canSplitBBox(shard.bbox, config)
       ) {
-        store.splitShard(shard.id, splitBBox(shard.bbox));
+        store.splitShard(shard.id, splitBBox(shard.bbox), shard.runToken);
         return;
       }
 
-      store.completeShard(shard.id, response.leads);
+      store.completeShard(shard.id, response.leads, shard.runToken);
     } catch (error) {
       const isRateOrTimeout =
         error.name === "AbortError" ||
@@ -143,22 +149,22 @@ function createWorker({ store, config, nocoDb = null }) {
         canSplit &&
         (shard.depth <= config.immediateSplitDepth || shard.attemptCount >= 2)
       ) {
-        store.splitShard(shard.id, splitBBox(shard.bbox));
+        store.splitShard(shard.id, splitBBox(shard.bbox), shard.runToken);
         return;
       }
 
       if (shard.attemptCount < config.retryLimit) {
         const delay = config.retryBaseDelayMs * 2 ** (shard.attemptCount - 1);
-        store.retryShard(shard.id, error.message, delay);
+        store.retryShard(shard.id, error.message, delay, shard.runToken);
         return;
       }
 
       if (canSplit) {
-        store.splitShard(shard.id, splitBBox(shard.bbox));
+        store.splitShard(shard.id, splitBBox(shard.bbox), shard.runToken);
         return;
       }
 
-      store.failShard(shard.id, error.message);
+      store.failShard(shard.id, error.message, shard.runToken);
     }
   }
 
@@ -203,6 +209,18 @@ function createWorker({ store, config, nocoDb = null }) {
       } catch (error) {
         console.error(`Incremental NocoDB sync failed for job ${jobId}:`, error.message);
       }
+    }
+  }
+
+  function recoverStaleRunningShards() {
+    const recoveredJobIds = store.reclaimStaleRunningShards(
+      config.runningShardStaleMs
+    );
+
+    if (recoveredJobIds.length > 0) {
+      console.warn(
+        `Recovered stale running shards for ${recoveredJobIds.length} job(s).`
+      );
     }
   }
 }

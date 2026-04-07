@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const Database = require("better-sqlite3");
@@ -47,6 +48,7 @@ function createStore(config) {
       status TEXT NOT NULL,
       result_count INTEGER NOT NULL DEFAULT 0,
       attempt_count INTEGER NOT NULL DEFAULT 0,
+      run_token TEXT,
       next_run_at TEXT NOT NULL,
       last_error TEXT,
       created_at TEXT NOT NULL,
@@ -121,6 +123,7 @@ function createStore(config) {
     ["postcode", "TEXT"],
     ["country", "TEXT"],
   ]);
+  ensureLeadColumns(db, "shards", [["run_token", "TEXT"]]);
   backfillLeadLocations(db);
 
   resetRunningShards(db);
@@ -833,6 +836,7 @@ function createStore(config) {
 
     claimNextShard() {
       const timestamp = nowIso();
+      const runToken = crypto.randomUUID();
       const row = db
         .prepare(
           `
@@ -857,10 +861,11 @@ function createStore(config) {
           UPDATE shards
           SET status = 'running',
               attempt_count = attempt_count + 1,
-              updated_at = @timestamp
+              updated_at = @timestamp,
+              run_token = @runToken
           WHERE id = @id
         `
-      ).run({ id: row.id, timestamp });
+       ).run({ id: row.id, timestamp, runToken });
 
       return this.getShard(row.id);
     },
@@ -879,19 +884,29 @@ function createStore(config) {
       return row ? deserializeShardRow(row) : null;
     },
 
-    splitShard(shardId, childBBoxes) {
+    splitShard(shardId, childBBoxes, runToken = null) {
       const shard = this.getShard(shardId);
+      if (!shard) {
+        return null;
+      }
+
       const timestamp = nowIso();
 
-      db.transaction(() => {
-        db.prepare(
+      const splitJobId = db.transaction(() => {
+        const updated = db.prepare(
           `
             UPDATE shards
             SET status = 'split',
+                run_token = NULL,
                 updated_at = @timestamp
             WHERE id = @id
+              ${buildOwnedRunningShardClause(runToken)}
           `
-        ).run({ id: shardId, timestamp });
+        ).run(buildOwnedRunningShardParams({ id: shardId, timestamp, runToken }));
+
+        if (updated.changes === 0) {
+          return null;
+        }
 
         const insert = db.prepare(
           `
@@ -911,32 +926,72 @@ function createStore(config) {
             timestamp,
           });
         }
+        return shard.jobId;
       })();
 
-      this.refreshJobStats(shard.jobId);
-      return shard.jobId;
+      if (!splitJobId) {
+        return null;
+      }
+
+      this.refreshJobStats(splitJobId);
+      return splitJobId;
     },
 
-    skipShard(shardId, message) {
+    skipShard(shardId, message, runToken = null) {
       const shard = this.getShard(shardId);
-      db.prepare(
+      if (!shard) {
+        return null;
+      }
+
+      const result = db.prepare(
         `
           UPDATE shards
           SET status = 'skipped',
+              run_token = NULL,
               last_error = @message,
               updated_at = @timestamp
           WHERE id = @id
+            ${buildOwnedRunningShardClause(runToken)}
         `
-      ).run({ id: shardId, message, timestamp: nowIso() });
+      ).run(buildOwnedRunningShardParams({
+        id: shardId,
+        message,
+        timestamp: nowIso(),
+        runToken,
+      }));
+
+      if (result.changes === 0) {
+        return null;
+      }
+
       this.refreshJobStats(shard.jobId);
       return shard.jobId;
     },
 
-    completeShard(shardId, leads) {
+    completeShard(shardId, leads, runToken = null) {
       const shard = this.getShard(shardId);
+      if (!shard) {
+        return null;
+      }
+
       const timestamp = nowIso();
 
-      db.transaction(() => {
+      const completedJobId = db.transaction(() => {
+        const ownedShard = db
+          .prepare(
+            `
+              SELECT id
+              FROM shards
+              WHERE id = @id
+                ${buildOwnedRunningShardClause(runToken)}
+            `
+          )
+          .get(buildOwnedRunningShardParams({ id: shardId, runToken }));
+
+        if (!ownedShard) {
+          return null;
+        }
+
         const insert = db.prepare(
           `
             INSERT INTO leads (
@@ -1023,56 +1078,139 @@ function createStore(config) {
             UPDATE shards
             SET status = 'done',
                 result_count = @resultCount,
+                run_token = NULL,
                 last_error = NULL,
                 updated_at = @timestamp
             WHERE id = @id
+              ${buildOwnedRunningShardClause(runToken)}
           `
-        ).run({
+        ).run(buildOwnedRunningShardParams({
           id: shardId,
           resultCount: leads.length,
           timestamp,
-        });
+          runToken,
+        }));
+
+        return shard.jobId;
       })();
 
-      this.refreshJobStats(shard.jobId);
-      return shard.jobId;
+      if (!completedJobId) {
+        return null;
+      }
+
+      this.refreshJobStats(completedJobId);
+      return completedJobId;
     },
 
-    retryShard(shardId, errorMessage, delayMs) {
+    retryShard(shardId, errorMessage, delayMs, runToken = null) {
       const shard = this.getShard(shardId);
+      if (!shard) {
+        return null;
+      }
+
       const nextRunAt = new Date(Date.now() + delayMs).toISOString();
-      db.prepare(
+      const result = db.prepare(
         `
           UPDATE shards
           SET status = 'retry',
+              run_token = NULL,
               last_error = @errorMessage,
               next_run_at = @nextRunAt,
               updated_at = @timestamp
           WHERE id = @id
+            ${buildOwnedRunningShardClause(runToken)}
         `
-      ).run({
+      ).run(buildOwnedRunningShardParams({
         id: shardId,
         errorMessage,
         nextRunAt,
         timestamp: nowIso(),
-      });
+        runToken,
+      }));
+
+      if (result.changes === 0) {
+        return null;
+      }
+
       this.refreshJobStats(shard.jobId);
       return shard.jobId;
     },
 
-    failShard(shardId, errorMessage) {
+    failShard(shardId, errorMessage, runToken = null) {
       const shard = this.getShard(shardId);
-      db.prepare(
+      if (!shard) {
+        return null;
+      }
+
+      const result = db.prepare(
         `
           UPDATE shards
           SET status = 'failed',
+              run_token = NULL,
               last_error = @errorMessage,
               updated_at = @timestamp
           WHERE id = @id
+            ${buildOwnedRunningShardClause(runToken)}
         `
-      ).run({ id: shardId, errorMessage, timestamp: nowIso() });
+      ).run(buildOwnedRunningShardParams({
+        id: shardId,
+        errorMessage,
+        timestamp: nowIso(),
+        runToken,
+      }));
+
+      if (result.changes === 0) {
+        return null;
+      }
+
       this.refreshJobStats(shard.jobId);
       return shard.jobId;
+    },
+
+    reclaimStaleRunningShards(staleMs) {
+      const staleBefore = new Date(Date.now() - staleMs).toISOString();
+      const timestamp = nowIso();
+      const staleJobs = db
+        .prepare(
+          `
+            SELECT DISTINCT job_id AS jobId
+            FROM shards
+            WHERE status = 'running'
+              AND updated_at <= @staleBefore
+          `
+        )
+        .all({ staleBefore })
+        .map((row) => row.jobId);
+
+      if (staleJobs.length === 0) {
+        return [];
+      }
+
+      db.prepare(
+        `
+          UPDATE shards
+          SET status = 'retry',
+              run_token = NULL,
+              next_run_at = @timestamp,
+              updated_at = @timestamp,
+              last_error = CASE
+                WHEN COALESCE(last_error, '') = '' THEN @message
+                ELSE last_error
+              END
+          WHERE status = 'running'
+            AND updated_at <= @staleBefore
+        `
+      ).run({
+        staleBefore,
+        timestamp,
+        message: "Recovered after running shard exceeded the stale timeout.",
+      });
+
+      for (const jobId of staleJobs) {
+        this.refreshJobStats(jobId);
+      }
+
+      return staleJobs;
     },
 
     refreshJobStats(jobId) {
@@ -1153,6 +1291,7 @@ function resetRunningShards(db) {
     `
       UPDATE shards
       SET status = 'retry',
+          run_token = NULL,
           next_run_at = @timestamp,
           updated_at = @timestamp,
           last_error = COALESCE(last_error, 'Recovered after process restart.')
@@ -1184,6 +1323,21 @@ function cleanupExpiredSessions(db) {
       WHERE expires_at <= @timestamp
     `
   ).run({ timestamp: nowIso() });
+}
+
+function buildOwnedRunningShardClause(runToken) {
+  return runToken
+    ? "AND status = 'running' AND run_token = @runToken"
+    : "";
+}
+
+function buildOwnedRunningShardParams(params) {
+  return params.runToken ? params : omitRunToken(params);
+}
+
+function omitRunToken(params) {
+  const { runToken, ...rest } = params;
+  return rest;
 }
 
 function ensureLeadColumns(db, tableName, columns) {
@@ -1292,6 +1446,7 @@ function deserializeShardRow(row) {
     status: row.status,
     resultCount: row.result_count,
     attemptCount: row.attempt_count,
+    runToken: row.run_token || null,
     nextRunAt: row.next_run_at,
     lastError: row.last_error,
     createdAt: row.created_at,

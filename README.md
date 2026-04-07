@@ -10,6 +10,7 @@ Autonomous country-scale OpenStreetMap scraper built for long-running public API
 - extracts POIs from **Overpass API**
 - persists job, shard, and lead state in SQLite
 - retries and splits failed or overloaded shards
+- re-queues stale claimed shards automatically if a worker claim is orphaned
 - lets operators pause and resume long-running jobs without losing state
 - exports CSV and JSON artifacts when a job finishes
 - exposes a built-in operator dashboard for long-running country jobs
@@ -163,6 +164,7 @@ If **auto-create columns** is enabled, the scraper will try to create any missin
 - `OVERPASS_DELAY_MS` delay between Overpass requests
 - `OVERPASS_TIMEOUT_MS` HTTP timeout
 - `OVERPASS_QUERY_TIMEOUT_SEC` query timeout passed to Overpass (default `75`)
+- `RUNNING_SHARD_STALE_MS` reclaim `running` shards that have been stuck past this timeout (defaults to a value safely above the Overpass timeout)
 - `MAX_SHARD_DEPTH` max bbox subdivision depth
 - `RETRY_LIMIT` retry attempts before final failure or forced split
 - `RETRY_BASE_DELAY_MS` exponential backoff base
@@ -217,5 +219,6 @@ docker run -p 3000:3000 -v $(pwd)/data:/app/data osm-country-scraper
 - Large countries are now seeded from geometry-clipped initial shards so countries like the United States do not start from a world-spanning bbox.
 - Website values come from OSM tags such as `website` and `contact:website`.
 - Long-running progress is best interpreted through shard states rather than only job status. A country job can keep splitting into finer shards as dense areas are discovered.
+- If a shard ever gets orphaned in `running`, the worker now re-queues it automatically once it exceeds the stale timeout instead of waiting for a process restart.
 - The dashboard and job APIs are intentionally protected behind the same login so the UI cannot be bypassed by unauthenticated requests.
 - NocoDB is treated as an output/sync layer, not the scraper's authoritative runtime database.

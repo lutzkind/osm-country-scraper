@@ -50,10 +50,19 @@ function arrayFromEnv(name, fallback = []) {
 }
 
 const dataDir = process.env.DATA_DIR || path.join(process.cwd(), "data");
+const port = intFromEnv("PORT", 3000);
+const workerPollMs = intFromEnv("WORKER_POLL_MS", 5000);
+const overpassDelayMs = intFromEnv("OVERPASS_DELAY_MS", 2000);
+const overpassTimeoutMs = intFromEnv("OVERPASS_TIMEOUT_MS", 120000);
+const overpassQueryTimeoutSec = intFromEnv("OVERPASS_QUERY_TIMEOUT_SEC", 75);
+const runningShardStaleMs = intFromEnv(
+  "RUNNING_SHARD_STALE_MS",
+  Math.max(overpassTimeoutMs * 4, workerPollMs * 24, 15 * 60 * 1000)
+);
 
 module.exports = {
   host: process.env.HOST || "0.0.0.0",
-  port: intFromEnv("PORT", 3000),
+  port,
   dataDir,
   dbPath: process.env.DB_PATH || path.join(dataDir, "osm-country-scraper.db"),
   exportsDir: process.env.EXPORTS_DIR || path.join(dataDir, "exports"),
@@ -66,10 +75,11 @@ module.exports = {
     "https://nominatim.openstreetmap.org/search",
   overpassUrl:
     process.env.OVERPASS_URL || "https://overpass-api.de/api/interpreter",
-  workerPollMs: intFromEnv("WORKER_POLL_MS", 5000),
-  overpassDelayMs: intFromEnv("OVERPASS_DELAY_MS", 2000),
-  overpassTimeoutMs: intFromEnv("OVERPASS_TIMEOUT_MS", 120000),
-  overpassQueryTimeoutSec: intFromEnv("OVERPASS_QUERY_TIMEOUT_SEC", 75),
+  workerPollMs,
+  overpassDelayMs,
+  overpassTimeoutMs,
+  overpassQueryTimeoutSec,
+  runningShardStaleMs,
   maxShardDepth: intFromEnv("MAX_SHARD_DEPTH", 8),
   retryLimit: intFromEnv("RETRY_LIMIT", 6),
   retryBaseDelayMs: intFromEnv("RETRY_BASE_DELAY_MS", 60000),

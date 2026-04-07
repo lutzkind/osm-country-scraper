@@ -772,16 +772,21 @@ function createStore(config) {
     },
 
     recoverFailedShards(jobId, options = {}) {
-      const splitLevels = normalizeRecoverySplitLevels(options.splitLevels);
+      const requestedSplitLevels = normalizeRecoverySplitLevels(options.splitLevels);
       const job = this.getJob(jobId);
       if (!job) {
         return null;
       }
 
-      if (!["partial", "failed"].includes(job.status)) {
+      const allowedStatuses = options.allowRunning
+        ? ["running", "partial", "failed"]
+        : ["partial", "failed"];
+      if (!allowedStatuses.includes(job.status)) {
         throw createHttpError(
           409,
-          "Only partial or failed jobs can recover failed shards."
+          options.allowRunning
+            ? "Only running, partial, or failed jobs can recover failed shards."
+            : "Only partial or failed jobs can recover failed shards."
         );
       }
 
@@ -802,10 +807,26 @@ function createStore(config) {
         throw createHttpError(409, "This job has no failed shards to recover.");
       }
 
+      const recoveryPlan = failedShards
+        .map((shard) =>
+          buildFailedShardRecoveryPlan(
+            shard,
+            requestedSplitLevels,
+            config.maxShardDepth
+          )
+        )
+        .filter(Boolean);
+
+      if (!recoveryPlan.length) {
+        throw createHttpError(
+          409,
+          "Failed shards are already at the maximum recovery depth."
+        );
+      }
+
       const timestamp = nowIso();
-      const childShardCount = failedShards.reduce(
-        (total, shard) =>
-          total + buildRecoveryChildBBoxes(shard.bbox, splitLevels).length,
+      const childShardCount = recoveryPlan.reduce(
+        (total, entry) => total + entry.children.length,
         0
       );
       const artifactPaths = [job.artifactCsvPath, job.artifactJsonPath].filter(Boolean);
@@ -837,14 +858,14 @@ function createStore(config) {
           `
         );
 
-        for (const shard of failedShards) {
+        for (const entry of recoveryPlan) {
+          const { shard, splitLevels, children } = entry;
           markRecovered.run({
             id: shard.id,
             message: `Recovered failed shard into smaller tiles (${splitLevels} split level${splitLevels === 1 ? "" : "s"}).`,
             timestamp,
           });
 
-          const children = buildRecoveryChildBBoxes(shard.bbox, splitLevels);
           for (const child of children) {
             insertChild.run({
               jobId,
@@ -868,7 +889,7 @@ function createStore(config) {
           `
         ).run({
           jobId,
-          message: `Recovering failed shards with ${childShardCount} smaller tiles.`,
+          message: `Recovering ${recoveryPlan.length} failed shards with ${childShardCount} smaller tiles.`,
           timestamp,
         });
 
@@ -887,9 +908,10 @@ function createStore(config) {
 
       return {
         job: this.getJob(jobId),
-        recoveredShardCount: failedShards.length,
+        recoveredShardCount: recoveryPlan.length,
         createdShardCount: childShardCount,
-        splitLevels,
+        splitLevels: requestedSplitLevels,
+        unrecoverableShardCount: failedShards.length - recoveryPlan.length,
       };
     },
 
@@ -1467,6 +1489,20 @@ function normalizeRecoverySplitLevels(value) {
   }
 
   return parsed;
+}
+
+function buildFailedShardRecoveryPlan(shard, requestedSplitLevels, maxShardDepth) {
+  const availableSplitLevels = maxShardDepth - shard.depth;
+  if (availableSplitLevels < 1) {
+    return null;
+  }
+
+  const splitLevels = Math.min(requestedSplitLevels, availableSplitLevels);
+  return {
+    shard,
+    splitLevels,
+    children: buildRecoveryChildBBoxes(shard.bbox, splitLevels),
+  };
 }
 
 function buildOwnedRunningShardClause(runToken) {

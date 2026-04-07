@@ -179,6 +179,13 @@ function createWorker({ store, config, nocoDb = null }) {
       return;
     }
 
+    if (config.autoRecoverFailedShards && job.failedShards > 0) {
+      const recovered = tryAutoRecoverFailedShards(job);
+      if (recovered) {
+        return;
+      }
+    }
+
     if (job.leadCount === 0 && job.failedShards === job.totalShards) {
       store.finalizeJob(jobId, "failed", "All shards failed.");
       return;
@@ -221,6 +228,29 @@ function createWorker({ store, config, nocoDb = null }) {
       console.warn(
         `Recovered stale running shards for ${recoveredJobIds.length} job(s).`
       );
+    }
+  }
+
+  function tryAutoRecoverFailedShards(job) {
+    try {
+      const recovery = store.recoverFailedShards(job.id, {
+        splitLevels: config.autoRecoverFailedShardSplitLevels,
+        allowRunning: true,
+      });
+      if (!recovery || recovery.recoveredShardCount <= 0) {
+        return false;
+      }
+
+      console.warn(
+        `Auto-recovered ${recovery.recoveredShardCount} failed shard(s) for job ${job.id} into ${recovery.createdShardCount} child shard(s).`
+      );
+      return true;
+    } catch (error) {
+      if (error?.statusCode && error.statusCode < 500) {
+        console.warn(`Auto-recovery skipped for job ${job.id}: ${error.message}`);
+        return false;
+      }
+      throw error;
     }
   }
 }

@@ -121,19 +121,16 @@ curl -b cookies.txt -X POST http://localhost:3000/jobs/<jobId>/resume
 
 Pausing stops the scheduler from claiming new shards for that job. Any shard that is already running is allowed to finish safely, and the remaining queued shards stay available for resume later.
 
-### Recover failed shards as smaller tiles
+### Automatic failed-shard recovery
 
-```bash
-curl -b cookies.txt -X POST http://localhost:3000/jobs/<jobId>/recover-failed \
-  -H 'Content-Type: application/json' \
-  -d '{"splitLevels":2}'
-```
+When a job runs out of unfinished shards but still has terminal `failed` shards, the worker now tries one more recovery step automatically before finalizing the job as `partial` or `failed`.
 
-This operator action is intended for terminal `partial` or `failed` jobs that exhausted retries on a small set of hard shards. It converts each failed shard into smaller child shards, clears stale finished artifacts, and reopens the job so the worker can continue from the recovered tiles.
+- `AUTO_RECOVER_FAILED_SHARDS` defaults to `true`.
+- `AUTO_RECOVER_FAILED_SHARD_SPLIT_LEVELS` defaults to `2`, which creates up to `16` child tiles per recoverable failed shard.
+- Recovery is bounded by `MAX_SHARD_DEPTH`, so the worker only reopens failed shards that can still be split safely.
+- Old CSV/JSON artifacts are cleared automatically when the job is reopened.
 
-- `splitLevels` defaults to `2`, which creates `16` child tiles per failed shard.
-- Valid values are `1` to `3`.
-- Only jobs with at least one `failed` shard can use this action.
+The authenticated `POST /jobs/<jobId>/recover-failed` endpoint still exists for operators, but normal recovery no longer depends on a dashboard button or manual API call.
 
 ### Delete job
 
@@ -234,6 +231,6 @@ docker run -p 3000:3000 -v $(pwd)/data:/app/data osm-country-scraper
 - Website values come from OSM tags such as `website` and `contact:website`.
 - Long-running progress is best interpreted through shard states rather than only job status. A country job can keep splitting into finer shards as dense areas are discovered.
 - If a shard ever gets orphaned in `running`, the worker now re-queues it automatically once it exceeds the stale timeout instead of waiting for a process restart.
-- If a job ends `partial` because a few shards exhausted retries, operators can now reopen only the failed shards as smaller tiles instead of rerunning the whole job.
+- If a job would otherwise end `partial` because a few shards exhausted retries, the worker now automatically reopens recoverable failed shards as smaller tiles before giving up on the job.
 - The dashboard and job APIs are intentionally protected behind the same login so the UI cannot be bypassed by unauthenticated requests.
 - NocoDB is treated as an output/sync layer, not the scraper's authoritative runtime database.

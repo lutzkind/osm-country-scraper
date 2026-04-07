@@ -59,6 +59,11 @@ const runningShardStaleMs = intFromEnv(
   "RUNNING_SHARD_STALE_MS",
   Math.max(overpassTimeoutMs * 4, workerPollMs * 24, 15 * 60 * 1000)
 );
+const autoRecoverFailedShards = boolFromEnv("AUTO_RECOVER_FAILED_SHARDS", true);
+const autoRecoverFailedShardSplitLevels = intFromEnv(
+  "AUTO_RECOVER_FAILED_SHARD_SPLIT_LEVELS",
+  2
+);
 
 module.exports = {
   host: process.env.HOST || "0.0.0.0",
@@ -80,6 +85,8 @@ module.exports = {
   overpassTimeoutMs,
   overpassQueryTimeoutSec,
   runningShardStaleMs,
+  autoRecoverFailedShards,
+  autoRecoverFailedShardSplitLevels,
   maxShardDepth: intFromEnv("MAX_SHARD_DEPTH", 8),
   retryLimit: intFromEnv("RETRY_LIMIT", 6),
   retryBaseDelayMs: intFromEnv("RETRY_BASE_DELAY_MS", 60000),

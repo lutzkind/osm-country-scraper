@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const Database = require("better-sqlite3");
+const { splitBBox } = require("./geo");
 const { extractLocationFields } = require("./osm");
 
 function nowIso() {
@@ -770,6 +771,128 @@ function createStore(config) {
       return this.getJob(jobId);
     },
 
+    recoverFailedShards(jobId, options = {}) {
+      const splitLevels = normalizeRecoverySplitLevels(options.splitLevels);
+      const job = this.getJob(jobId);
+      if (!job) {
+        return null;
+      }
+
+      if (!["partial", "failed"].includes(job.status)) {
+        throw createHttpError(
+          409,
+          "Only partial or failed jobs can recover failed shards."
+        );
+      }
+
+      const failedShards = db
+        .prepare(
+          `
+            SELECT *
+            FROM shards
+            WHERE job_id = ?
+              AND status = 'failed'
+            ORDER BY depth DESC, id ASC
+          `
+        )
+        .all(jobId)
+        .map(deserializeShardRow);
+
+      if (!failedShards.length) {
+        throw createHttpError(409, "This job has no failed shards to recover.");
+      }
+
+      const timestamp = nowIso();
+      const childShardCount = failedShards.reduce(
+        (total, shard) =>
+          total + buildRecoveryChildBBoxes(shard.bbox, splitLevels).length,
+        0
+      );
+      const artifactPaths = [job.artifactCsvPath, job.artifactJsonPath].filter(Boolean);
+
+      db.transaction(() => {
+        const markRecovered = db.prepare(
+          `
+            UPDATE shards
+            SET status = 'split',
+                run_token = NULL,
+                last_error = CASE
+                  WHEN COALESCE(last_error, '') = '' THEN @message
+                  ELSE last_error
+                END,
+                updated_at = @timestamp
+            WHERE id = @id
+              AND status = 'failed'
+          `
+        );
+        const insertChild = db.prepare(
+          `
+            INSERT INTO shards (
+              job_id, bbox_json, depth, status, result_count, attempt_count,
+              run_token, next_run_at, last_error, created_at, updated_at
+            ) VALUES (
+              @jobId, @bboxJson, @depth, 'pending', 0, 0,
+              NULL, @timestamp, NULL, @timestamp, @timestamp
+            )
+          `
+        );
+
+        for (const shard of failedShards) {
+          markRecovered.run({
+            id: shard.id,
+            message: `Recovered failed shard into smaller tiles (${splitLevels} split level${splitLevels === 1 ? "" : "s"}).`,
+            timestamp,
+          });
+
+          const children = buildRecoveryChildBBoxes(shard.bbox, splitLevels);
+          for (const child of children) {
+            insertChild.run({
+              jobId,
+              bboxJson: JSON.stringify(child),
+              depth: shard.depth + splitLevels,
+              timestamp,
+            });
+          }
+        }
+
+        db.prepare(
+          `
+            UPDATE jobs
+            SET status = 'running',
+                message = @message,
+                artifact_csv_path = NULL,
+                artifact_json_path = NULL,
+                finished_at = NULL,
+                updated_at = @timestamp
+            WHERE id = @jobId
+          `
+        ).run({
+          jobId,
+          message: `Recovering failed shards with ${childShardCount} smaller tiles.`,
+          timestamp,
+        });
+
+        this.refreshJobStats(jobId);
+      })();
+
+      for (const artifactPath of artifactPaths) {
+        try {
+          fs.unlinkSync(artifactPath);
+        } catch (error) {
+          if (error.code !== "ENOENT") {
+            throw error;
+          }
+        }
+      }
+
+      return {
+        job: this.getJob(jobId),
+        recoveredShardCount: failedShards.length,
+        createdShardCount: childShardCount,
+        splitLevels,
+      };
+    },
+
     deleteJob(jobId) {
       const job = this.getJob(jobId);
       if (!job) {
@@ -1325,6 +1448,27 @@ function cleanupExpiredSessions(db) {
   ).run({ timestamp: nowIso() });
 }
 
+function buildRecoveryChildBBoxes(bbox, splitLevels) {
+  let boxes = [bbox];
+  for (let index = 0; index < splitLevels; index += 1) {
+    boxes = boxes.flatMap((box) => splitBBox(box));
+  }
+  return boxes;
+}
+
+function normalizeRecoverySplitLevels(value) {
+  if (value == null || value === "") {
+    return 2;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) {
+    throw createHttpError(400, "splitLevels must be an integer between 1 and 3.");
+  }
+
+  return parsed;
+}
+
 function buildOwnedRunningShardClause(runToken) {
   return runToken
     ? "AND status = 'running' AND run_token = @runToken"
@@ -1408,6 +1552,12 @@ function safeJsonParse(value) {
   } catch {
     return null;
   }
+}
+
+function createHttpError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
 }
 
 function deserializeJobRow(row) {

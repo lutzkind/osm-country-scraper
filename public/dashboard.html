@@ -313,6 +313,7 @@
             <div class="toolbar">
               <button id="pause-job-button" class="secondary" type="button">Pause job</button>
               <button id="resume-job-button" class="secondary" type="button">Resume job</button>
+              <button id="recover-failed-button" class="secondary" type="button">Recover failed shards</button>
               <button id="cancel-job-button" class="secondary" type="button">Cancel job</button>
               <button id="delete-job-button" class="secondary" type="button">Delete job</button>
               <button id="sync-nocodb-button" class="secondary" type="button">Sync to NocoDB</button>
@@ -435,6 +436,7 @@
         jobSyncStatus: document.getElementById("job-sync-status"),
         pauseJobButton: document.getElementById("pause-job-button"),
         resumeJobButton: document.getElementById("resume-job-button"),
+        recoverFailedButton: document.getElementById("recover-failed-button"),
         cancelJobButton: document.getElementById("cancel-job-button"),
         deleteJobButton: document.getElementById("delete-job-button"),
         syncNocoDbButton: document.getElementById("sync-nocodb-button"),
@@ -612,6 +614,7 @@
           <a href="${escapeHtml(links.leads)}">leads</a> ·
           <a href="${escapeHtml(links.csv)}">csv</a> ·
           <a href="${escapeHtml(links.json)}">json</a> ·
+          <a href="${escapeHtml(links.recoverFailed)}">recover failed</a> ·
           <a href="${escapeHtml(links.nocodbSync)}">nocodb sync</a>
         `;
 
@@ -637,6 +640,7 @@
         els.jobSyncStatus.textContent = syncParts.join(" · ");
         els.pauseJobButton.disabled = !["pending", "running"].includes(job.status);
         els.resumeJobButton.disabled = job.status !== "paused";
+        els.recoverFailedButton.disabled = !["partial", "failed"].includes(job.status) || Number(job.failedShards || 0) <= 0;
         els.cancelJobButton.disabled = ["completed", "partial", "failed", "canceled"].includes(job.status);
         els.deleteJobButton.disabled = !["completed", "partial", "failed", "canceled"].includes(job.status);
         els.syncNocoDbButton.disabled = !syncStatus?.enabled;
@@ -882,6 +886,37 @@
             body: "{}",
           });
           setMessage(els.createJobMessage, "Job resumed.");
+          await fullRefresh();
+        } catch (error) {
+          setMessage(els.createJobMessage, error.message, true);
+        }
+      });
+
+      els.recoverFailedButton.addEventListener("click", async () => {
+        if (!state.selectedJobId) {
+          return;
+        }
+
+        const confirmed = window.confirm(
+          "Recover the failed shards for this job by reopening them as smaller tiles?"
+        );
+        if (!confirmed) {
+          return;
+        }
+
+        setMessage(els.createJobMessage, "Recovering failed shards...");
+
+        try {
+          const payload = await requestJson(`/jobs/${state.selectedJobId}/recover-failed`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          });
+          const recovery = payload.recovery || {};
+          setMessage(
+            els.createJobMessage,
+            `Recovered ${formatNumber(recovery.recoveredShardCount || 0)} failed shards into ${formatNumber(recovery.createdShardCount || 0)} smaller tiles.`
+          );
           await fullRefresh();
         } catch (error) {
           setMessage(els.createJobMessage, error.message, true);

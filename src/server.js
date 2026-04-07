@@ -250,6 +250,32 @@ function createApp({ store, config, nocoDb }) {
     });
   });
 
+  app.post("/jobs/:jobId/recover-failed", (req, res, next) => {
+    try {
+      const job = store.getJob(req.params.jobId);
+      if (!job) {
+        return res.status(404).json({ error: "Job not found." });
+      }
+
+      const result = store.recoverFailedShards(job.id, {
+        splitLevels: req.body?.splitLevels,
+      });
+
+      return res.json({
+        job: result.job,
+        stats: store.getJobStats(job.id),
+        links: buildLinks(req, config, job.id),
+        recovery: {
+          recoveredShardCount: result.recoveredShardCount,
+          createdShardCount: result.createdShardCount,
+          splitLevels: result.splitLevels,
+        },
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.delete("/jobs/:jobId", (req, res, next) => {
     try {
       const job = store.getJob(req.params.jobId);
@@ -346,6 +372,7 @@ function buildLinks(req, config, jobId) {
     cancel: `${baseUrl}/jobs/${jobId}/cancel`,
     pause: `${baseUrl}/jobs/${jobId}/pause`,
     resume: `${baseUrl}/jobs/${jobId}/resume`,
+    recoverFailed: `${baseUrl}/jobs/${jobId}/recover-failed`,
     delete: `${baseUrl}/jobs/${jobId}`,
     nocodbSync: `${baseUrl}/jobs/${jobId}/sync/nocodb`,
   };

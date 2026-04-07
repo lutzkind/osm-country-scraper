@@ -121,6 +121,20 @@ curl -b cookies.txt -X POST http://localhost:3000/jobs/<jobId>/resume
 
 Pausing stops the scheduler from claiming new shards for that job. Any shard that is already running is allowed to finish safely, and the remaining queued shards stay available for resume later.
 
+### Recover failed shards as smaller tiles
+
+```bash
+curl -b cookies.txt -X POST http://localhost:3000/jobs/<jobId>/recover-failed \
+  -H 'Content-Type: application/json' \
+  -d '{"splitLevels":2}'
+```
+
+This operator action is intended for terminal `partial` or `failed` jobs that exhausted retries on a small set of hard shards. It converts each failed shard into smaller child shards, clears stale finished artifacts, and reopens the job so the worker can continue from the recovered tiles.
+
+- `splitLevels` defaults to `2`, which creates `16` child tiles per failed shard.
+- Valid values are `1` to `3`.
+- Only jobs with at least one `failed` shard can use this action.
+
 ### Delete job
 
 ```bash
@@ -220,5 +234,6 @@ docker run -p 3000:3000 -v $(pwd)/data:/app/data osm-country-scraper
 - Website values come from OSM tags such as `website` and `contact:website`.
 - Long-running progress is best interpreted through shard states rather than only job status. A country job can keep splitting into finer shards as dense areas are discovered.
 - If a shard ever gets orphaned in `running`, the worker now re-queues it automatically once it exceeds the stale timeout instead of waiting for a process restart.
+- If a job ends `partial` because a few shards exhausted retries, operators can now reopen only the failed shards as smaller tiles instead of rerunning the whole job.
 - The dashboard and job APIs are intentionally protected behind the same login so the UI cannot be bypassed by unauthenticated requests.
 - NocoDB is treated as an output/sync layer, not the scraper's authoritative runtime database.

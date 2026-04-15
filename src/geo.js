@@ -33,10 +33,42 @@ function bboxAreaDegrees(bbox) {
 }
 
 function canSplitBBox(bbox, config) {
-  return (
-    bbox.east - bbox.west > config.minShardWidthDeg &&
-    bbox.north - bbox.south > config.minShardHeightDeg
-  );
+  return canSplitByWidth(bbox, config) || canSplitByHeight(bbox, config);
+}
+
+function splitBBoxAdaptive(bbox, config) {
+  const canSplitWidth = canSplitByWidth(bbox, config);
+  const canSplitHeight = canSplitByHeight(bbox, config);
+
+  if (canSplitWidth && canSplitHeight) {
+    return splitBBox(bbox);
+  }
+
+  if (canSplitWidth) {
+    const midLon = (bbox.west + bbox.east) / 2;
+    return [
+      { south: bbox.south, west: bbox.west, north: bbox.north, east: midLon },
+      { south: bbox.south, west: midLon, north: bbox.north, east: bbox.east },
+    ];
+  }
+
+  if (canSplitHeight) {
+    const midLat = (bbox.south + bbox.north) / 2;
+    return [
+      { south: bbox.south, west: bbox.west, north: midLat, east: bbox.east },
+      { south: midLat, west: bbox.west, north: bbox.north, east: bbox.east },
+    ];
+  }
+
+  return [bbox];
+}
+
+function canSplitByWidth(bbox, config) {
+  return bbox.east - bbox.west > config.minShardWidthDeg;
+}
+
+function canSplitByHeight(bbox, config) {
+  return bbox.north - bbox.south > config.minShardHeightDeg;
 }
 
 function bboxIntersectsGeometry(bbox, geometry) {
@@ -73,7 +105,7 @@ function buildSeedBBoxes(bbox, geometry, config, depth = 0) {
     return [bbox];
   }
 
-  return splitBBox(bbox).flatMap((child) =>
+  return splitBBoxAdaptive(bbox, config).flatMap((child) =>
     buildSeedBBoxes(child, geometry, config, depth + 1)
   );
 }
@@ -83,6 +115,7 @@ module.exports = {
   bboxToArray,
   bboxAreaDegrees,
   splitBBox,
+  splitBBoxAdaptive,
   canSplitBBox,
   bboxIntersectsGeometry,
   pointInsideGeometry,

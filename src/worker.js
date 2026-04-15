@@ -3,7 +3,7 @@ const {
   bboxAreaDegrees,
   bboxIntersectsGeometry,
   buildSeedBBoxes,
-  splitBBox,
+  splitBBoxAdaptive,
   canSplitBBox,
 } = require("./geo");
 const { resolveCountry, queryOverpass } = require("./osm");
@@ -107,7 +107,11 @@ function createWorker({ store, config, nocoDb = null }) {
       bboxAreaDegrees(shard.bbox) > config.preQuerySplitAreaDegSq;
 
     if (canSplit && isOversized) {
-      store.splitShard(shard.id, splitBBox(shard.bbox), shard.runToken);
+      store.splitShard(
+        shard.id,
+        splitBBoxAdaptive(shard.bbox, config),
+        shard.runToken
+      );
       return;
     }
 
@@ -128,7 +132,11 @@ function createWorker({ store, config, nocoDb = null }) {
         shard.depth < config.maxShardDepth &&
         canSplitBBox(shard.bbox, config)
       ) {
-        store.splitShard(shard.id, splitBBox(shard.bbox), shard.runToken);
+        store.splitShard(
+          shard.id,
+          splitBBoxAdaptive(shard.bbox, config),
+          shard.runToken
+        );
         return;
       }
 
@@ -149,7 +157,11 @@ function createWorker({ store, config, nocoDb = null }) {
         canSplit &&
         (shard.depth <= config.immediateSplitDepth || shard.attemptCount >= 2)
       ) {
-        store.splitShard(shard.id, splitBBox(shard.bbox), shard.runToken);
+        store.splitShard(
+          shard.id,
+          splitBBoxAdaptive(shard.bbox, config),
+          shard.runToken
+        );
         return;
       }
 
@@ -160,7 +172,11 @@ function createWorker({ store, config, nocoDb = null }) {
       }
 
       if (canSplit) {
-        store.splitShard(shard.id, splitBBox(shard.bbox), shard.runToken);
+        store.splitShard(
+          shard.id,
+          splitBBoxAdaptive(shard.bbox, config),
+          shard.runToken
+        );
         return;
       }
 

@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const Database = require("better-sqlite3");
-const { splitBBox } = require("./geo");
+const { splitBBoxAdaptive } = require("./geo");
 const { extractLocationFields } = require("./osm");
 
 function nowIso() {
@@ -812,7 +812,7 @@ function createStore(config) {
           buildFailedShardRecoveryPlan(
             shard,
             requestedSplitLevels,
-            config.maxShardDepth
+            config
           )
         )
         .filter(Boolean);
@@ -846,6 +846,20 @@ function createStore(config) {
               AND status = 'failed'
           `
         );
+        const requeueShard = db.prepare(
+          `
+            UPDATE shards
+            SET status = 'pending',
+                result_count = 0,
+                attempt_count = 0,
+                run_token = NULL,
+                next_run_at = @timestamp,
+                last_error = @message,
+                updated_at = @timestamp
+            WHERE id = @id
+              AND status = 'failed'
+          `
+        );
         const insertChild = db.prepare(
           `
             INSERT INTO shards (
@@ -859,6 +873,16 @@ function createStore(config) {
         );
 
         for (const entry of recoveryPlan) {
+          if (entry.mode === "requeue") {
+            requeueShard.run({
+              id: entry.shard.id,
+              message:
+                "Recovered failed shard for another attempt without further splitting.",
+              timestamp,
+            });
+            continue;
+          }
+
           const { shard, splitLevels, children } = entry;
           markRecovered.run({
             id: shard.id,
@@ -869,8 +893,8 @@ function createStore(config) {
           for (const child of children) {
             insertChild.run({
               jobId,
-              bboxJson: JSON.stringify(child),
-              depth: shard.depth + splitLevels,
+              bboxJson: JSON.stringify(child.bbox),
+              depth: child.depth,
               timestamp,
             });
           }
@@ -910,6 +934,8 @@ function createStore(config) {
         job: this.getJob(jobId),
         recoveredShardCount: recoveryPlan.length,
         createdShardCount: childShardCount,
+        requeuedShardCount: recoveryPlan.filter((entry) => entry.mode === "requeue")
+          .length,
         splitLevels: requestedSplitLevels,
         unrecoverableShardCount: failedShards.length - recoveryPlan.length,
       };
@@ -991,7 +1017,7 @@ function createStore(config) {
             WHERE s.status IN ('pending', 'retry')
               AND s.next_run_at <= @timestamp
               AND j.status = 'running'
-            ORDER BY s.depth DESC, s.updated_at ASC, s.id ASC
+            ORDER BY j.updated_at ASC, s.depth DESC, s.next_run_at ASC, s.updated_at ASC, s.id ASC
             LIMIT 1
           `
         )
@@ -1470,10 +1496,15 @@ function cleanupExpiredSessions(db) {
   ).run({ timestamp: nowIso() });
 }
 
-function buildRecoveryChildBBoxes(bbox, splitLevels) {
-  let boxes = [bbox];
+function buildRecoveryChildBBoxes(bbox, splitLevels, config) {
+  let boxes = [{ bbox, depthDelta: 0 }];
   for (let index = 0; index < splitLevels; index += 1) {
-    boxes = boxes.flatMap((box) => splitBBox(box));
+    boxes = boxes.flatMap((entry) =>
+      splitBBoxAdaptive(entry.bbox, config).map((child) => ({
+        bbox: child,
+        depthDelta: entry.depthDelta + 1,
+      }))
+    );
   }
   return boxes;
 }
@@ -1491,17 +1522,26 @@ function normalizeRecoverySplitLevels(value) {
   return parsed;
 }
 
-function buildFailedShardRecoveryPlan(shard, requestedSplitLevels, maxShardDepth) {
-  const availableSplitLevels = maxShardDepth - shard.depth;
+function buildFailedShardRecoveryPlan(shard, requestedSplitLevels, config) {
+  const availableSplitLevels = config.maxShardDepth - shard.depth;
   if (availableSplitLevels < 1) {
-    return null;
+    return {
+      mode: "requeue",
+      shard,
+      splitLevels: 0,
+      children: [],
+    };
   }
 
   const splitLevels = Math.min(requestedSplitLevels, availableSplitLevels);
   return {
+    mode: "split",
     shard,
     splitLevels,
-    children: buildRecoveryChildBBoxes(shard.bbox, splitLevels),
+    children: buildRecoveryChildBBoxes(shard.bbox, splitLevels, config).map((entry) => ({
+      bbox: entry.bbox,
+      depth: shard.depth + entry.depthDelta,
+    })),
   };
 }
 

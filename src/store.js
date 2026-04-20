@@ -71,6 +71,7 @@ function createStore(config) {
       website TEXT,
       phone TEXT,
       email TEXT,
+      business_status TEXT,
       address TEXT,
       city TEXT,
       area TEXT,
@@ -123,6 +124,7 @@ function createStore(config) {
     ["state_region", "TEXT"],
     ["postcode", "TEXT"],
     ["country", "TEXT"],
+    ["business_status", "TEXT"],
   ]);
   ensureLeadColumns(db, "shards", [["run_token", "TEXT"]]);
   backfillLeadLocations(db);
@@ -1167,11 +1169,11 @@ function createStore(config) {
           `
             INSERT INTO leads (
               job_id, osm_type, osm_id, name, category, subcategory, website,
-              phone, email, address, city, area, state_region, postcode, country,
+              phone, email, business_status, address, city, area, state_region, postcode, country,
               lat, lon, source_bbox_json, tags_json, created_at, updated_at
             ) VALUES (
               @jobId, @osmType, @osmId, @name, @category, @subcategory, @website,
-              @phone, @email, @address, @city, @area, @stateRegion, @postcode,
+              @phone, @email, @businessStatus, @address, @city, @area, @stateRegion, @postcode,
               @country, @lat, @lon, @sourceBBoxJson, @tagsJson, @timestamp, @timestamp
             )
             ON CONFLICT(job_id, osm_type, osm_id) DO UPDATE SET
@@ -1189,6 +1191,10 @@ function createStore(config) {
               email = CASE
                 WHEN COALESCE(leads.email, '') = '' THEN excluded.email
                 ELSE leads.email
+              END,
+              business_status = CASE
+                WHEN COALESCE(leads.business_status, '') = '' THEN excluded.business_status
+                ELSE leads.business_status
               END,
               address = CASE
                 WHEN COALESCE(leads.address, '') = '' THEN excluded.address
@@ -1230,6 +1236,7 @@ function createStore(config) {
             website: lead.website,
             phone: lead.phone,
             email: lead.email,
+            businessStatus: lead.status,
             address: lead.address,
             city: lead.city,
             area: lead.area,
@@ -1695,6 +1702,7 @@ function deserializeLeadRow(row) {
     website: row.website,
     phone: row.phone,
     email: row.email,
+    status: row.business_status,
     address: row.address,
     city: row.city,
     area: row.area,

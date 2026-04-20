@@ -256,6 +256,7 @@ function mapElementToLead(element, geometry, bbox) {
     website: normalizeWebsite(tags.website || tags["contact:website"]),
     phone: normalizePhone(tags.phone || tags["contact:phone"]),
     email: normalizeEmail(tags.email || tags["contact:email"]),
+    status: deriveBusinessStatus(tags),
     address: buildAddress(tags),
     city: location.city,
     area: location.area,
@@ -269,7 +270,37 @@ function mapElementToLead(element, geometry, bbox) {
   };
 }
 
+function deriveBusinessStatus(tags) {
+  if (hasTruthyLifecycleTag(tags, ["abandoned", "disused", "demolished", "razed"])) {
+    return "CLOSED";
+  }
+
+  if (String(tags?.closed || "").trim().toLowerCase() === "yes") {
+    return "CLOSED";
+  }
+
+  if (hasLifecycleNamespace(tags, ["abandoned", "disused", "demolished", "razed"])) {
+    return "CLOSED";
+  }
+
+  return null;
+}
+
+function hasTruthyLifecycleTag(tags, keys) {
+  return keys.some((key) => {
+    const value = String(tags?.[key] || "").trim().toLowerCase();
+    return ["yes", "true", "1"].includes(value);
+  });
+}
+
+function hasLifecycleNamespace(tags, prefixes) {
+  return Object.keys(tags || {}).some((key) =>
+    prefixes.some((prefix) => key.startsWith(`${prefix}:`))
+  );
+}
+
 module.exports = {
+  deriveBusinessStatus,
   extractLocationFields,
   resolveCountry,
   queryOverpass,
